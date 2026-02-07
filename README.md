@@ -88,13 +88,46 @@ Important:
 - `0.0.0.0` is the server bind address, not a reliable browser URL.
 - In Safari especially, avoid `http://0.0.0.0:2121`.
 
-## Quick Start (Docker)
+## Docker Deployment
+
+### Prerequisites
+
+- Docker Engine / Docker Desktop installed
+- Docker daemon running (`docker info` should succeed)
+
+### Start with Docker Compose
 
 ```bash
-docker compose up --build -d
+docker compose up -d --build
 ```
 
 Open `http://localhost:2121`.
+
+### Verify container status
+
+```bash
+docker compose ps
+docker compose logs -f
+```
+
+### Stop services
+
+```bash
+docker compose down
+```
+
+### Pull latest code and redeploy
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+### Notes
+
+- App listens on container port `8080`
+- Host port mapping is `2121:8080` (configured in `docker-compose.yml`)
+- If host port `2121` is occupied, change the `ports` mapping in `docker-compose.yml`
 
 ## How To Use
 

@@ -1,0 +1,21 @@
+# VCS
+.git
+.gitignore
+
+# Python env/cache
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Local tooling/artifacts
+.DS_Store
+.vscode
+.idea
+*.log
+
+# Runtime docs/tests not needed in image
+tests
