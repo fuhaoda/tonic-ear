@@ -151,6 +151,18 @@ DIFFICULTY_LEVELS = {
         "tokens": ["1", "#1", "2", "#2", "3", "4", "#4", "5", "#5", "6", "#6", "7"],
         "display": "1,#1/b2,2,#2/b3,3,4,#4/b5,5,#5/b6,6,#6/b7,7",
     },
+    "L5": {
+        "id": "L5_WHOLE_TONE",
+        "label": "Whole-Tone Proximity",
+        "tokens": ["1", "#1", "2", "#2", "3", "4", "#4", "5", "#5", "6", "#6", "7"],
+        "display": "L5 uses close-note drills (1 whole tone / 2 semitones)",
+    },
+    "L6": {
+        "id": "L6_SEMITONE",
+        "label": "Semitone Proximity",
+        "tokens": ["1", "#1", "2", "#2", "3", "4", "#4", "5", "#5", "6", "#6", "7"],
+        "display": "L6 uses closest-note drills (1 semitone)",
+    },
 }
 
 

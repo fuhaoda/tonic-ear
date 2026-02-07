@@ -7,13 +7,15 @@ from app.domain.music import get_note_pool
 def test_meta_contains_expected_module_count_and_structure():
     meta = get_meta()
     assert "modules" in meta
-    assert len(meta["modules"]) == 19
+    assert len(meta["modules"]) == 25
     assert meta["defaults"]["showVisualHints"] is False
 
     module_ids = {module["id"] for module in meta["modules"]}
     assert "MI-L4" not in module_ids
     assert "M2-L1" in module_ids
-    assert "M4-L4" in module_ids
+    assert "M2-L6" in module_ids
+    assert "M3-L5" in module_ids
+    assert "M4-L6" in module_ids
 
 
 def test_generate_session_returns_20_questions():
@@ -75,3 +77,61 @@ def test_single_note_l4_requires_accidental_selector():
     for question in session["questions"]:
         assert question["choices"]["requiresAccidental"] is True
         assert question["choices"]["accidentals"] == ["flat", "natural", "sharp"]
+
+
+def test_compare_two_l5_uses_whole_tone_distance():
+    random.seed(23)
+    session = generate_session(
+        module_id="M2-L5",
+        gender="male",
+        key="C",
+        temperament="equal_temperament",
+    )
+
+    for question in session["questions"]:
+        semitones = sorted(note["semitone"] for note in question["notes"])
+        assert semitones[1] - semitones[0] == 2
+
+
+def test_compare_two_l6_uses_semitone_distance():
+    random.seed(29)
+    session = generate_session(
+        module_id="M2-L6",
+        gender="male",
+        key="C",
+        temperament="equal_temperament",
+    )
+
+    for question in session["questions"]:
+        semitones = sorted(note["semitone"] for note in question["notes"])
+        assert semitones[1] - semitones[0] == 1
+
+
+def test_sort_three_l5_has_whole_tone_steps_when_sorted():
+    random.seed(31)
+    session = generate_session(
+        module_id="M3-L5",
+        gender="female",
+        key="E",
+        temperament="just_intonation",
+    )
+
+    for question in session["questions"]:
+        semitones = sorted(note["semitone"] for note in question["notes"])
+        diffs = [right - left for left, right in zip(semitones, semitones[1:])]
+        assert diffs == [2, 2]
+
+
+def test_sort_four_l6_has_semitone_steps_when_sorted():
+    random.seed(37)
+    session = generate_session(
+        module_id="M4-L6",
+        gender="female",
+        key="A",
+        temperament="equal_temperament",
+    )
+
+    for question in session["questions"]:
+        semitones = sorted(note["semitone"] for note in question["notes"])
+        diffs = [right - left for left, right in zip(semitones, semitones[1:])]
+        assert diffs == [1, 1, 1]

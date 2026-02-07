@@ -17,7 +17,7 @@ The app supports repeated practice at the same difficulty level while keeping sc
 ## Core Features
 
 - 20 questions per session, fixed by module
-- Progressive module ladder (L1 -> L4)
+- Progressive module ladder (L1 -> L6)
 - Global settings for:
   - Gender base Do (`male=130.8Hz`, `female=261.6Hz`)
   - Key (`1=C` through `1=B`)
@@ -31,11 +31,33 @@ The app supports repeated practice at the same difficulty level while keeping sc
 
 ## Modules
 
-- `M2-L1..L4`: Two-note higher/lower
-- `M3-L1..L4`: Three-note sorting (low -> high)
-- `M4-L1..L4`: Four-note sorting (low -> high)
+- `M2-L1..L6`: Two-note higher/lower
+- `M3-L1..L6`: Three-note sorting (low -> high)
+- `M4-L1..L6`: Four-note sorting (low -> high)
 - `MI-L1..L3`: Two-note scale-step distance
 - `MS-L1..L4`: Single-note guess (no visual hint)
+
+## Level Definitions
+
+`M2/M3/M4` use `L1..L6`:
+
+- `L1` (Triad): only `1,3,5`
+- `L2` (Pentatonic): `1,2,3,5,6`
+- `L3` (Heptatonic): `1,2,3,4,5,6,7`
+- `L4` (Chromatic): full 12-note set (`1,#1,2,#2,3,4,#4,5,#5,6,#6,7`)
+- `L5` (Whole-tone proximity): notes are constrained to one whole tone apart (2 semitones)
+- `L6` (Semitone proximity): notes are constrained to one semitone apart
+
+How spacing constraints apply:
+
+- `M2-L5/L6`: the two notes differ by exactly 2/1 semitones
+- `M3-L5/L6`: when sorted low to high, adjacent notes differ by 2/1 semitones
+- `M4-L5/L6`: when sorted low to high, adjacent notes differ by 2/1 semitones
+
+Other module ranges:
+
+- `MI` supports `L1..L3` only
+- `MS` supports `L1..L4` only
 
 Note: `M4-L1` internally uses the `L2` note pool because `L1` has only 3 unique notes and four-note sorting requires 4 unique notes.
 

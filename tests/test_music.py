@@ -41,3 +41,5 @@ def test_note_pools_match_expected_sizes():
     assert len(get_note_pool("L2")) == 5
     assert len(get_note_pool("L3")) == 7
     assert len(get_note_pool("L4")) == 12
+    assert len(get_note_pool("L5")) == 12
+    assert len(get_note_pool("L6")) == 12

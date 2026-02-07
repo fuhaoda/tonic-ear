@@ -20,6 +20,7 @@ from app.domain.music import (
 )
 
 QUESTION_COUNT = 20
+PITCH_MODULE_LEVELS = ["L1", "L2", "L3", "L4", "L5", "L6"]
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,7 @@ def _build_modules() -> list[ModuleConfig]:
     order = 1
 
     # Two-note compare.
-    for level in ["L1", "L2", "L3", "L4"]:
+    for level in PITCH_MODULE_LEVELS:
         modules.append(
             ModuleConfig(
                 module_id=f"M2-{level}",
@@ -49,7 +50,7 @@ def _build_modules() -> list[ModuleConfig]:
         order += 1
 
     # Three-note sorting.
-    for level in ["L1", "L2", "L3", "L4"]:
+    for level in PITCH_MODULE_LEVELS:
         modules.append(
             ModuleConfig(
                 module_id=f"M3-{level}",
@@ -62,7 +63,7 @@ def _build_modules() -> list[ModuleConfig]:
         order += 1
 
     # Four-note sorting.
-    for level in ["L1", "L2", "L3", "L4"]:
+    for level in PITCH_MODULE_LEVELS:
         modules.append(
             ModuleConfig(
                 module_id=f"M4-{level}",
@@ -206,7 +207,8 @@ def _generate_question(
 
 
 def _generate_compare_two(module, question_number, notes_pool, do_frequency, temperament) -> dict:
-    picked = random.sample(notes_pool, 2)
+    interval_step = _interval_constraint_for_level(module.level)
+    picked = _pick_compare_notes(notes_pool, interval_step)
     note_payloads = [build_note_payload(note, do_frequency, temperament) for note in picked]
 
     correct_answer = "first_higher" if picked[0].semitone > picked[1].semitone else "second_higher"
@@ -226,7 +228,8 @@ def _generate_compare_two(module, question_number, notes_pool, do_frequency, tem
 
 
 def _generate_sort(module, question_number, notes_pool, do_frequency, temperament, note_count: int) -> dict:
-    picked = random.sample(notes_pool, note_count)
+    interval_step = _interval_constraint_for_level(module.level)
+    picked = _pick_sort_notes(notes_pool, note_count, interval_step)
     note_payloads = [build_note_payload(note, do_frequency, temperament) for note in picked]
     sorted_indices = sorted(range(note_count), key=lambda idx: picked[idx].semitone)
 
@@ -316,6 +319,55 @@ def _build_visual_hints(notes: list) -> list[dict]:
         normalized = (note.semitone - min_semitone) / (max_semitone - min_semitone)
         hints.append({"index": idx + 1, "height": round(10 + normalized * 80, 2)})
     return hints
+
+
+def _interval_constraint_for_level(level: str) -> int | None:
+    """Return semitone constraint for advanced proximity levels."""
+
+    if level == "L5":
+        return 2  # one whole tone
+    if level == "L6":
+        return 1  # one semitone
+    return None
+
+
+def _pick_compare_notes(notes_pool: list, interval_step: int | None):
+    if interval_step is None:
+        return random.sample(notes_pool, 2)
+
+    valid_pairs = [
+        [left, right]
+        for left, right in combinations(notes_pool, 2)
+        if abs(left.semitone - right.semitone) == interval_step
+    ]
+    if not valid_pairs:
+        return random.sample(notes_pool, 2)
+
+    picked = random.choice(valid_pairs)
+    random.shuffle(picked)
+    return picked
+
+
+def _pick_sort_notes(notes_pool: list, note_count: int, interval_step: int | None):
+    if interval_step is None:
+        return random.sample(notes_pool, note_count)
+
+    note_by_semitone = {note.semitone: note for note in notes_pool}
+    semitone_values = sorted(note_by_semitone.keys())
+    valid_sequences = []
+
+    for start in semitone_values:
+        sequence = [start + interval_step * idx for idx in range(note_count)]
+        if all(semitone in note_by_semitone for semitone in sequence):
+            valid_sequences.append(sequence)
+
+    if not valid_sequences:
+        return random.sample(notes_pool, note_count)
+
+    selected_sequence = random.choice(valid_sequences)
+    picked = [note_by_semitone[semitone] for semitone in selected_sequence]
+    random.shuffle(picked)
+    return picked
 
 
 def validate_temperament(temperament: str) -> None:
