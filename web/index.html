@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tonic Ear</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="bg-shape bg-shape-a"></div>
+    <div class="bg-shape bg-shape-b"></div>
+
+    <header class="app-header">
+      <div class="app-header-inner">
+        <div>
+          <h1>Tonic Ear</h1>
+          <p>Progressive ear training for pitch and scale recognition.</p>
+        </div>
+        <button id="headerHomeBtn" class="btn btn-ghost" type="button">Home</button>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <p id="globalError" class="global-error hidden"></p>
+
+      <section id="dashboardView" class="view active">
+        <div class="panel settings-panel">
+          <h2>Training Settings</h2>
+          <div class="settings-grid">
+            <label>
+              Gender
+              <select id="genderSelect"></select>
+            </label>
+            <label>
+              Key
+              <select id="keySelect"></select>
+            </label>
+            <label>
+              Temperament
+              <select id="temperamentSelect"></select>
+            </label>
+            <label class="checkbox-line">
+              <input id="showVisualHints" type="checkbox" />
+              Show visual pitch hints (comparison and sorting only)
+            </label>
+          </div>
+          <button id="resetProgressBtn" class="btn btn-ghost" type="button">Reset local progress</button>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title-row">
+            <h2>Module List</h2>
+            <span class="chip">20 questions each</span>
+          </div>
+          <div id="moduleGrid" class="module-grid"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Recent Results</h2>
+          <div id="historyList" class="history-list"></div>
+        </div>
+      </section>
+
+      <section id="quizView" class="view hidden">
+        <div class="panel quiz-panel">
+          <div class="quiz-top-row">
+            <div>
+              <p id="quizModuleTitle" class="module-title"></p>
+              <p id="quizProgress" class="subtle"></p>
+            </div>
+            <button id="backToDashboardBtn" class="btn btn-ghost" type="button">Exit Session</button>
+          </div>
+
+          <h2 id="promptText"></h2>
+
+          <label class="checkbox-line quiz-visual-toggle">
+            <input id="quizShowVisualHints" type="checkbox" />
+            Show visual pitch hints
+          </label>
+
+          <div id="visualHintContainer" class="visual-hint-container"></div>
+
+          <div class="playback-controls">
+            <div class="playback-buttons">
+              <button id="repeatBtn" class="btn" type="button">Repeat</button>
+              <button id="showAnswerBtn" class="btn btn-ghost hidden" type="button">Show Answer</button>
+            </div>
+            <span class="subtle">Auto-played once. Repeat any time.</span>
+          </div>
+
+          <div id="answerArea" class="answer-area"></div>
+
+          <div class="quiz-status-block">
+            <p id="feedbackText" class="feedback is-empty" aria-live="polite">&nbsp;</p>
+            <div class="quiz-footer-row">
+              <button id="nextBtn" class="btn btn-primary" type="button" disabled>Next</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="resultView" class="view hidden">
+        <div class="panel">
+          <h2>Session Result</h2>
+          <p id="scoreLine" class="score-line"></p>
+          <p id="scoreDetail" class="subtle"></p>
+          <div class="result-actions">
+            <button id="backToHomeBtn" class="btn" type="button">Back to Dashboard</button>
+            <button id="retryModuleBtn" class="btn btn-primary" type="button">Retry Same Module</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Mistakes Replay</h2>
+          <div id="mistakeList" class="mistake-list"></div>
+        </div>
+      </section>
+    </main>
+
+    <section class="touch-keyboard-panel" id="touchKeyboardPanel" aria-label="Touch keyboard">
+      <p class="subtle">Tap and hold 1-7 to sustain tones</p>
+      <div class="touch-keyboard-buttons" id="touchKeyboardButtons">
+        <button class="btn touch-key" type="button" data-degree="1">1</button>
+        <button class="btn touch-key" type="button" data-degree="2">2</button>
+        <button class="btn touch-key" type="button" data-degree="3">3</button>
+        <button class="btn touch-key" type="button" data-degree="4">4</button>
+        <button class="btn touch-key" type="button" data-degree="5">5</button>
+        <button class="btn touch-key" type="button" data-degree="6">6</button>
+        <button class="btn touch-key" type="button" data-degree="7">7</button>
+      </div>
+    </section>
+
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>
