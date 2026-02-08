@@ -24,7 +24,16 @@
     ],
     "preAttackMs": 5,
     "fadeInMs": 3,
-    "fadeOutMs": 80
+    "fadeOutMs": 80,
+    "gainCompensation": {
+      "windowStartMs": 30,
+      "windowMs": 450,
+      "targetRms": 0.1251794,
+      "gainClamp": [
+        0.65,
+        1.35
+      ]
+    }
   },
   "sampleCount": 35,
   "targetFrequencyCount": 299,
@@ -42,6 +51,7 @@
       "semitoneOffset": 0,
       "note": "C3",
       "hz": 130.8,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s00.m4a"
     },
     {
@@ -49,6 +59,7 @@
       "semitoneOffset": 1,
       "note": "Db3",
       "hz": 138.577773,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s01.m4a"
     },
     {
@@ -56,6 +67,7 @@
       "semitoneOffset": 2,
       "note": "D3",
       "hz": 146.818036,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s02.m4a"
     },
     {
@@ -63,6 +75,7 @@
       "semitoneOffset": 3,
       "note": "Eb3",
       "hz": 155.548291,
+      "gain": 0.754235,
       "file": "/assets/audio/piano/s03.m4a"
     },
     {
@@ -70,6 +83,7 @@
       "semitoneOffset": 4,
       "note": "E3",
       "hz": 164.797673,
+      "gain": 0.725901,
       "file": "/assets/audio/piano/s04.m4a"
     },
     {
@@ -77,6 +91,7 @@
       "semitoneOffset": 5,
       "note": "F3",
       "hz": 174.597053,
+      "gain": 0.70914,
       "file": "/assets/audio/piano/s05.m4a"
     },
     {
@@ -84,6 +99,7 @@
       "semitoneOffset": 6,
       "note": "Gb3",
       "hz": 184.979134,
+      "gain": 0.803408,
       "file": "/assets/audio/piano/s06.m4a"
     },
     {
@@ -91,6 +107,7 @@
       "semitoneOffset": 7,
       "note": "G3",
       "hz": 195.978566,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s07.m4a"
     },
     {
@@ -98,6 +115,7 @@
       "semitoneOffset": 8,
       "note": "Ab3",
       "hz": 207.632058,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s08.m4a"
     },
     {
@@ -105,6 +123,7 @@
       "semitoneOffset": 9,
       "note": "A3",
       "hz": 219.978502,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s09.m4a"
     },
     {
@@ -112,6 +131,7 @@
       "semitoneOffset": 10,
       "note": "Bb3",
       "hz": 233.059105,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s10.m4a"
     },
     {
@@ -119,6 +139,7 @@
       "semitoneOffset": 11,
       "note": "B3",
       "hz": 246.91752,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s11.m4a"
     },
     {
@@ -126,6 +147,7 @@
       "semitoneOffset": 12,
       "note": "C4",
       "hz": 261.6,
+      "gain": 0.701281,
       "file": "/assets/audio/piano/s12.m4a"
     },
     {
@@ -133,6 +155,7 @@
       "semitoneOffset": 13,
       "note": "Db4",
       "hz": 277.155545,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s13.m4a"
     },
     {
@@ -140,6 +163,7 @@
       "semitoneOffset": 14,
       "note": "D4",
       "hz": 293.636072,
+      "gain": 1.200814,
       "file": "/assets/audio/piano/s14.m4a"
     },
     {
@@ -147,6 +171,7 @@
       "semitoneOffset": 15,
       "note": "Eb4",
       "hz": 311.096581,
+      "gain": 0.782549,
       "file": "/assets/audio/piano/s15.m4a"
     },
     {
@@ -154,6 +179,7 @@
       "semitoneOffset": 16,
       "note": "E4",
       "hz": 329.595347,
+      "gain": 0.821687,
       "file": "/assets/audio/piano/s16.m4a"
     },
     {
@@ -161,6 +187,7 @@
       "semitoneOffset": 17,
       "note": "F4",
       "hz": 349.194106,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s17.m4a"
     },
     {
@@ -168,6 +195,7 @@
       "semitoneOffset": 18,
       "note": "Gb4",
       "hz": 369.958268,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s18.m4a"
     },
     {
@@ -175,6 +203,7 @@
       "semitoneOffset": 19,
       "note": "G4",
       "hz": 391.957131,
+      "gain": 1.0,
       "file": "/assets/audio/piano/s19.m4a"
     },
     {
@@ -182,6 +211,7 @@
       "semitoneOffset": 20,
       "note": "Ab4",
       "hz": 415.264115,
+      "gain": 0.760356,
       "file": "/assets/audio/piano/s20.m4a"
     },
     {
@@ -189,6 +219,7 @@
       "semitoneOffset": 21,
       "note": "A4",
       "hz": 439.957004,
+      "gain": 0.732176,
       "file": "/assets/audio/piano/s21.m4a"
     },
     {
@@ -196,6 +227,7 @@
       "semitoneOffset": 22,
       "note": "Bb4",
       "hz": 466.118209,
+      "gain": 0.862941,
       "file": "/assets/audio/piano/s22.m4a"
     },
     {
@@ -203,6 +235,7 @@
       "semitoneOffset": 23,
       "note": "B4",
       "hz": 493.83504,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s23.m4a"
     },
     {
@@ -210,6 +243,7 @@
       "semitoneOffset": 24,
       "note": "C5",
       "hz": 523.2,
+      "gain": 1.195652,
       "file": "/assets/audio/piano/s24.m4a"
     },
     {
@@ -217,6 +251,7 @@
       "semitoneOffset": 25,
       "note": "Db5",
       "hz": 554.311091,
+      "gain": 0.9851,
       "file": "/assets/audio/piano/s25.m4a"
     },
     {
@@ -224,6 +259,7 @@
       "semitoneOffset": 26,
       "note": "D5",
       "hz": 587.272144,
+      "gain": 0.717437,
       "file": "/assets/audio/piano/s26.m4a"
     },
     {
@@ -231,6 +267,7 @@
       "semitoneOffset": 27,
       "note": "Eb5",
       "hz": 622.193163,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s27.m4a"
     },
     {
@@ -238,6 +275,7 @@
       "semitoneOffset": 28,
       "note": "E5",
       "hz": 659.190693,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s28.m4a"
     },
     {
@@ -245,6 +283,7 @@
       "semitoneOffset": 29,
       "note": "F5",
       "hz": 698.388212,
+      "gain": 0.775628,
       "file": "/assets/audio/piano/s29.m4a"
     },
     {
@@ -252,6 +291,7 @@
       "semitoneOffset": 30,
       "note": "Gb5",
       "hz": 739.916536,
+      "gain": 0.791561,
       "file": "/assets/audio/piano/s30.m4a"
     },
     {
@@ -259,6 +299,7 @@
       "semitoneOffset": 31,
       "note": "G5",
       "hz": 783.914263,
+      "gain": 1.35,
       "file": "/assets/audio/piano/s31.m4a"
     },
     {
@@ -266,6 +307,7 @@
       "semitoneOffset": 32,
       "note": "Ab5",
       "hz": 830.52823,
+      "gain": 0.884974,
       "file": "/assets/audio/piano/s32.m4a"
     },
     {
@@ -273,6 +315,7 @@
       "semitoneOffset": 33,
       "note": "A5",
       "hz": 879.914009,
+      "gain": 0.730079,
       "file": "/assets/audio/piano/s33.m4a"
     },
     {
@@ -280,6 +323,7 @@
       "semitoneOffset": 34,
       "note": "Bb5",
       "hz": 932.236419,
+      "gain": 0.800552,
       "file": "/assets/audio/piano/s34.m4a"
     }
   ]

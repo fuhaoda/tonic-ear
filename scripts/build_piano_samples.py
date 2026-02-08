@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 from array import array
+from math import sqrt
 import json
 import shutil
+from statistics import median
 import subprocess
 from pathlib import Path
 import sys
@@ -28,6 +30,10 @@ ONSET_THRESHOLD_FLOOR = 0.003
 ONSET_MIN_STREAK = 96
 FADE_IN_SEC = 0.003
 FADE_OUT_SEC = 0.08
+GAIN_MEASURE_START_SEC = 0.03
+GAIN_MEASURE_WINDOW_SEC = 0.45
+GAIN_CLAMP_MIN = 0.65
+GAIN_CLAMP_MAX = 1.35
 
 
 def parse_args() -> argparse.Namespace:
@@ -127,6 +133,50 @@ def detect_onset_seconds(input_path: Path, sample_rate: int) -> float:
     return 0.0
 
 
+def decode_mono_float_samples(input_path: Path, sample_rate: int) -> array:
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "-f",
+        "f32le",
+        "-",
+    ]
+    proc = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    samples = array("f")
+    samples.frombytes(proc.stdout)
+    return samples
+
+
+def measure_output_rms(input_path: Path, sample_rate: int) -> float:
+    samples = decode_mono_float_samples(input_path, sample_rate=sample_rate)
+    if not samples:
+        return 0.0
+
+    start_index = int(round(GAIN_MEASURE_START_SEC * sample_rate))
+    end_index = min(len(samples), start_index + int(round(GAIN_MEASURE_WINDOW_SEC * sample_rate)))
+    if end_index <= start_index:
+        start_index = 0
+        end_index = len(samples)
+
+    window = samples[start_index:end_index]
+    if not window:
+        return 0.0
+
+    energy = 0.0
+    for value in window:
+        energy += value * value
+    return sqrt(energy / len(window))
+
+
 def run_ffmpeg(
     input_path: Path,
     output_path: Path,
@@ -189,10 +239,11 @@ def build_audio_assets(
     duration: float,
     sample_rate: int,
     bitrate: str,
-) -> dict[str, float]:
+) -> tuple[dict[str, float], dict[str, float]]:
     output_dir.mkdir(parents=True, exist_ok=True)
     download_sources(cache_dir)
     onset_map: dict[str, float] = {}
+    rms_map: dict[str, float] = {}
 
     for spec in build_sample_specs():
         source_path = cache_dir / spec.source_filename
@@ -207,7 +258,8 @@ def build_audio_assets(
             bitrate=bitrate,
             trim_start_sec=onset_sec,
         )
-    return onset_map
+        rms_map[spec.id] = measure_output_rms(output_path, sample_rate=sample_rate)
+    return onset_map, rms_map
 
 
 def write_manifest(
@@ -216,6 +268,7 @@ def write_manifest(
     sample_rate: int,
     bitrate: str,
     onset_map: dict[str, float],
+    rms_map: dict[str, float],
 ) -> dict:
     sample_specs = build_sample_specs()
     targets = get_unique_target_frequencies()
@@ -223,6 +276,18 @@ def write_manifest(
     onset_values = list(onset_map.values())
     onset_min_ms = int(round(min(onset_values) * 1000)) if onset_values else 0
     onset_max_ms = int(round(max(onset_values) * 1000)) if onset_values else 0
+    rms_values = [value for value in rms_map.values() if value > 0]
+    target_rms = median(rms_values) if rms_values else 0.1
+
+    gain_map: dict[str, float] = {}
+    for spec in sample_specs:
+        rms = rms_map.get(spec.id, target_rms)
+        if rms <= 0:
+            gain = 1.0
+        else:
+            gain = target_rms / rms
+        gain = max(GAIN_CLAMP_MIN, min(GAIN_CLAMP_MAX, gain))
+        gain_map[spec.id] = gain
 
     manifest = {
         "version": 1,
@@ -248,6 +313,12 @@ def write_manifest(
             "preAttackMs": PRE_ATTACK_MS,
             "fadeInMs": int(round(FADE_IN_SEC * 1000)),
             "fadeOutMs": int(round(FADE_OUT_SEC * 1000)),
+            "gainCompensation": {
+                "windowStartMs": int(round(GAIN_MEASURE_START_SEC * 1000)),
+                "windowMs": int(round(GAIN_MEASURE_WINDOW_SEC * 1000)),
+                "targetRms": round(target_rms, 8),
+                "gainClamp": [GAIN_CLAMP_MIN, GAIN_CLAMP_MAX],
+            },
         },
         "sampleCount": len(sample_specs),
         "targetFrequencyCount": len(targets),
@@ -265,6 +336,7 @@ def write_manifest(
                 "semitoneOffset": spec.semitone_offset,
                 "note": spec.note,
                 "hz": round(spec.hz, 6),
+                "gain": round(gain_map[spec.id], 6),
                 "file": f"/assets/audio/piano/{spec.output_filename}",
             }
             for spec in sample_specs
@@ -305,7 +377,7 @@ def main() -> None:
     if args.clean and output_dir.exists():
         shutil.rmtree(output_dir)
 
-    onset_map = build_audio_assets(
+    onset_map, rms_map = build_audio_assets(
         output_dir=output_dir,
         cache_dir=cache_dir,
         duration=args.duration,
@@ -318,6 +390,7 @@ def main() -> None:
         sample_rate=args.sample_rate,
         bitrate=args.bitrate,
         onset_map=onset_map,
+        rms_map=rms_map,
     )
     total_bytes, total_mb = enforce_size_budget(
         output_dir=output_dir,

@@ -84,6 +84,7 @@ The app ships with a compact piano sample set in `web/assets/audio/piano/`:
   - fixed `5ms` pre-attack padding for consistent start timing
   - `loudnorm` targeting `-20 LUFS`, `TP -2 dBTP`
   - fixed length `2000ms` for all files
+  - per-sample runtime gain compensation (from manifest) to reduce quiz loudness drift
 - source set: University of Iowa MIS Piano (`mf`)
 
 Current package size target/hard cap:
