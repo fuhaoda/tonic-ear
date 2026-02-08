@@ -21,7 +21,7 @@ The app supports repeated practice at the same difficulty level while keeping sc
 - Global settings for:
   - Gender base Do (`male=130.8Hz`, `female=261.6Hz`)
   - Key (`1=C` through `1=B`)
-  - Temperament (`equal_temperament`, `just_intonation`)
+  - Temperament (`Equal` / `Just`, API values: `equal_temperament` / `just_intonation`)
 - Repeat playback for each question
 - Tone length selector (`Short 900ms / Normal 1300ms / Full 2000ms`)
 - First-attempt scoring with optional retry on the same question

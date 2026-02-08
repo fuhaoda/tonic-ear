@@ -11,8 +11,8 @@ EQUAL_TEMPERAMENT = "equal_temperament"
 JUST_INTONATION = "just_intonation"
 
 TEMPERAMENT_OPTIONS = [
-    {"id": EQUAL_TEMPERAMENT, "label": "12-Tone Equal Temperament"},
-    {"id": JUST_INTONATION, "label": "5-limit Just Intonation"},
+    {"id": EQUAL_TEMPERAMENT, "label": "Equal"},
+    {"id": JUST_INTONATION, "label": "Just"},
 ]
 
 KEY_OPTIONS = [
