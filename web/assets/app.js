@@ -1064,7 +1064,8 @@ function handleGlobalToneKeydown(event) {
     return;
   }
 
-  if (!/^[1-7]$/.test(event.key)) {
+  const degree = resolveKeyboardDegree(event);
+  if (degree === null) {
     if (event.key === "Home") {
       event.preventDefault();
       goHomeView();
@@ -1076,8 +1077,7 @@ function handleGlobalToneKeydown(event) {
   if (event.repeat) {
     return;
   }
-  const degree = Number(event.key);
-  void startHeldTone(`kbd:${event.key}`, degree);
+  void startHeldTone(getKeyboardToneId(event), degree);
 }
 
 function goHomeView() {
@@ -1089,10 +1089,29 @@ function goHomeView() {
 }
 
 function handleGlobalToneKeyup(event) {
-  if (!/^[1-7]$/.test(event.key)) {
+  const degree = resolveKeyboardDegree(event);
+  if (degree === null) {
     return;
   }
-  stopHeldTone(`kbd:${event.key}`);
+  stopHeldTone(getKeyboardToneId(event));
+}
+
+function resolveKeyboardDegree(event) {
+  if (/^[1-7]$/.test(event.key)) {
+    return Number(event.key);
+  }
+
+  const code = event.code || "";
+  const match = /^(Digit|Numpad)([1-7])$/.exec(code);
+  if (match) {
+    return Number(match[2]);
+  }
+
+  return null;
+}
+
+function getKeyboardToneId(event) {
+  return `kbd:${event.code || event.key}`;
 }
 
 function handleTouchKeyboardPointerDown(event) {
