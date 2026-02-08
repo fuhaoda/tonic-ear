@@ -1067,16 +1067,8 @@ function mapTargetHzToSample(targetHz) {
     sampleId: nearestSample.id,
     sampleHz: nearestSample.hz,
     playbackRate: targetHz / nearestSample.hz,
-    gain: typeof nearestSample.gain === "number" ? nearestSample.gain : 1,
     centsError,
   };
-}
-
-function clampSampleGain(gain) {
-  if (!Number.isFinite(gain)) {
-    return 1;
-  }
-  return Math.max(0.65, Math.min(1.35, gain));
 }
 
 function validateMapping(mapping, targetHz) {
@@ -1366,15 +1358,13 @@ function startHeldToneFromBuffer(toneEntry, context, buffer, mapping) {
   const startAt = context.currentTime;
   const source = context.createBufferSource();
   const gainNode = context.createGain();
-  const mappedGain = clampSampleGain(mapping.gain);
-  const heldGain = Math.min(0.95, HELD_TONE_GAIN * mappedGain);
 
   source.buffer = buffer;
   source.playbackRate.setValueAtTime(mapping.playbackRate, startAt);
   configureHeldLoopWindow(source, buffer);
 
   gainNode.gain.setValueAtTime(0.0001, startAt);
-  gainNode.gain.exponentialRampToValueAtTime(heldGain, startAt + HELD_TONE_ATTACK_SEC);
+  gainNode.gain.exponentialRampToValueAtTime(HELD_TONE_GAIN, startAt + HELD_TONE_ATTACK_SEC);
 
   source.connect(gainNode);
   gainNode.connect(context.destination);
@@ -1605,8 +1595,7 @@ function scheduleSampleTone(context, frequency, mapping, startAt, durationSec) {
 
   const source = context.createBufferSource();
   const gainNode = context.createGain();
-  const mappedGain = clampSampleGain(mapping.gain);
-  const peakGain = Math.min(0.98, 0.92 * mappedGain);
+  const peakGain = 1.0;
   const releaseAt = Math.max(startAt + 0.03, startAt + durationSec - 0.08);
 
   source.buffer = buffer;
