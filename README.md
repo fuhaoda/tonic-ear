@@ -186,6 +186,7 @@ docker compose up -d --build
 
 - Press and hold `1-7` to sustain tones
 - Release key to stop tone
+- Very short taps still play with a minimum audible key-press envelope (piano-like response)
 - App tab must be focused
 - Press `Home` key to return to Dashboard quickly
 

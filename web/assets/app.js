@@ -9,8 +9,8 @@ const HELD_TONE_GAIN = 0.65;
 const MAX_CENTS_ERROR = 20;
 const ENABLE_OSCILLATOR_FALLBACK = true;
 const HELD_TONE_ATTACK_SEC = 0.003;
-const HELD_TONE_RELEASE_SEC = 0.05;
-const MIN_HELD_TONE_MS = 90;
+const HELD_TONE_RELEASE_SEC = 0.08;
+const MIN_HELD_TONE_MS = 220;
 const TONE_LENGTH_OPTIONS = [
   { id: "short", label: "Short (900ms)", durationMs: NOTE_DURATION_SHORT_MS },
   { id: "normal", label: "Normal (1300ms)", durationMs: NOTE_DURATION_NORMAL_MS },
@@ -324,9 +324,15 @@ function onSettingsChange() {
   warmAudioForCurrentSettings();
 }
 
-function warmAudioForCurrentSettings() {
+function warmAudioForCurrentSettings(options = {}) {
+  const shouldResume = Boolean(options.resumeContext);
   void (async () => {
     try {
+      if (shouldResume) {
+        await ensureAudioContext(true);
+      } else {
+        getOrCreateAudioContext();
+      }
       await preloadKeyboardSamples();
       void preloadPianoSamples().catch(() => {});
     } catch {
@@ -1096,7 +1102,7 @@ async function preloadKeyboardSamples() {
 }
 
 function warmAudioPipelineOnce() {
-  warmAudioForCurrentSettings();
+  warmAudioForCurrentSettings({ resumeContext: true });
 }
 
 async function playCurrentQuestion(options = {}) {
