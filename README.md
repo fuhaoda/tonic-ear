@@ -28,6 +28,7 @@ The app supports repeated practice at the same difficulty level while keeping sc
 - Visual hint mode (toggle on/off)
 - Local progress persistence (`localStorage`)
 - Desktop keyboard tones (`1-7`) and mobile touch keyboard (`1-7`, press and hold)
+- Piano sample playback with runtime nearest-note mapping (`<=20 cents` error)
 
 ## Modules
 
@@ -65,9 +66,41 @@ Note: `M4-L1` internally uses the `L2` note pool because `L1` has only 3 unique 
 
 - Backend: FastAPI
 - Frontend: Vanilla HTML/CSS/JavaScript
-- Audio: WebAudio API
+- Audio: 35-piano-sample pack (`.m4a`) + WebAudio playback-rate mapping
 - Tests: pytest + FastAPI TestClient
 - Deployment: local Python or Docker
+
+## Piano Audio Pack
+
+The app ships with a compact piano sample set in `web/assets/audio/piano/`:
+
+- `35` base samples (`C3` to `Bb5`)
+- `manifest.json` with sample metadata and mapping diagnostics
+- runtime mapping from target note Hz to nearest sample + `playbackRate`
+- hard pitch error guard: `abs(centsError) <= 20` (`< 0.2` semitone)
+- source set: University of Iowa MIS Piano (`mf`)
+
+Current package size target/hard cap:
+
+- target: `<10MB`
+- hard cap: `<20MB`
+
+Rebuild samples (download + transcode + manifest):
+
+```bash
+python3 scripts/build_piano_samples.py --clean --bitrate 128k
+```
+
+Requirements for rebuild:
+
+- `ffmpeg` available on PATH
+- network access to University of Iowa MIS source files
+
+Optional knobs:
+
+```bash
+python3 scripts/build_piano_samples.py --clean --bitrate 96k --duration 2.0 --target-mb 10 --max-total-mb 20
+```
 
 ## Quick Start (Local)
 
@@ -128,6 +161,7 @@ docker compose up -d --build
 - App listens on container port `8080`
 - Host port mapping is `2121:8080` (configured in `docker-compose.yml`)
 - If host port `2121` is occupied, change the `ports` mapping in `docker-compose.yml`
+- Sample assets are already included in the image via `COPY web ./web`
 
 ## How To Use
 
@@ -209,6 +243,13 @@ No account system is required for v1.
 . .venv/bin/activate
 pytest -q
 ```
+
+Audio-specific checks included in test suite:
+
+- 35 equal-temperament unique frequencies match 35 sample bases
+- 299 unique target frequencies map within `<=20 cents`
+- all 576 gender/key/temperament combinations pass mapping bound
+- sample manifest and package size guard (`<10MB`)
 
 ## Troubleshooting
 
