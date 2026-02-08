@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,6 +19,9 @@ if str(REPO_ROOT) not in sys.path:
 from app.domain.audio_samples import build_sample_specs, get_unique_target_frequencies, worst_mapping_error
 
 SOURCE_BASE_URL = "https://theremin.music.uiowa.edu/sound%20files/MIS/Piano_Other/piano"
+TARGET_PEAK_DB = -6.0
+MAX_GAIN_DB = 60.0
+MIN_GAIN_DB = -60.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -70,8 +74,54 @@ def download_sources(cache_dir: Path) -> list[Path]:
     return source_paths
 
 
+def _probe_max_volume(input_path: Path, duration: float, sample_rate: int, fade_out: float) -> float:
+    filter_chain = (
+        f"aformat=channel_layouts=mono,afade=t=in:st=0:d=0.015,afade=t=out:st={fade_out:.3f}:d=0.14,"
+        "volumedetect"
+    )
+    analysis_cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "info",
+        "-nostats",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "-af",
+        filter_chain,
+        "-t",
+        f"{duration:.3f}",
+        "-f",
+        "null",
+        "-",
+    ]
+    proc = subprocess.run(
+        analysis_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=True,
+    )
+    match = re.search(r"max_volume:\s*(-?[0-9.]+)\s*dB", proc.stdout)
+    if not match:
+        raise RuntimeError("Unable to parse max_volume from volumedetect output")
+    return float(match.group(1))
+
+
 def run_ffmpeg(input_path: Path, output_path: Path, duration: float, sample_rate: int, bitrate: str) -> None:
     fade_out = max(duration - 0.15, 0.01)
+    max_volume = _probe_max_volume(input_path, duration=duration, sample_rate=sample_rate, fade_out=fade_out)
+    gain_db = max(TARGET_PEAK_DB - max_volume, MIN_GAIN_DB)
+    gain_db = min(gain_db, MAX_GAIN_DB)
+    filter_chain = (
+        f"aformat=channel_layouts=mono,afade=t=in:st=0:d=0.015,afade=t=out:st={fade_out:.3f}:d=0.14,"
+        f"volume={gain_db:.4f}dB"
+    )
     ffmpeg_cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -86,7 +136,7 @@ def run_ffmpeg(input_path: Path, output_path: Path, duration: float, sample_rate
         "-ar",
         str(sample_rate),
         "-af",
-        f"afade=t=in:st=0:d=0.015,afade=t=out:st={fade_out:.3f}:d=0.14",
+        filter_chain,
         "-t",
         f"{duration:.3f}",
         "-c:a",
@@ -127,6 +177,11 @@ def write_manifest(output_dir: Path, duration: float, sample_rate: int, bitrate:
         "sampleRate": sample_rate,
         "codec": "aac",
         "bitrate": bitrate,
+        "normalization": {
+            "type": "peak",
+            "targetPeakDb": TARGET_PEAK_DB,
+            "gainClampDb": {"min": MIN_GAIN_DB, "max": MAX_GAIN_DB},
+        },
         "sampleCount": len(sample_specs),
         "targetFrequencyCount": len(targets),
         "maxMappingErrorCents": round(max_error_cents, 6),

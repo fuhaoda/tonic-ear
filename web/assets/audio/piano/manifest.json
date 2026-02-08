@@ -6,6 +6,14 @@
   "sampleRate": 44100,
   "codec": "aac",
   "bitrate": "128k",
+  "normalization": {
+    "type": "peak",
+    "targetPeakDb": -6.0,
+    "gainClampDb": {
+      "min": -60.0,
+      "max": 60.0
+    }
+  },
   "sampleCount": 35,
   "targetFrequencyCount": 299,
   "maxMappingErrorCents": 17.596288,

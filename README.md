@@ -78,6 +78,7 @@ The app ships with a compact piano sample set in `web/assets/audio/piano/`:
 - `manifest.json` with sample metadata and mapping diagnostics
 - runtime mapping from target note Hz to nearest sample + `playbackRate`
 - hard pitch error guard: `abs(centsError) <= 20` (`< 0.2` semitone)
+- samples are peak-normalized to a unified loudness target (`targetPeakDb = -6.0`)
 - source set: University of Iowa MIS Piano (`mf`)
 
 Current package size target/hard cap:
