@@ -8,6 +8,7 @@ const MAX_CENTS_ERROR = 20;
 const ENABLE_OSCILLATOR_FALLBACK = false;
 const HELD_TONE_ATTACK_SEC = 0.008;
 const HELD_TONE_RELEASE_SEC = 0.05;
+const MIN_HELD_TONE_MS = 140;
 const JUST_INTONATION_RATIOS = [
   1 / 1,
   16 / 15,
@@ -1035,7 +1036,6 @@ function warmAudioPipelineOnce() {
   void (async () => {
     try {
       await ensureAudioContext();
-      await preloadPianoSamples();
     } catch {
       // Warm-up is opportunistic; explicit playback paths handle user-visible errors.
     }
@@ -1142,13 +1142,27 @@ async function startHeldTone(toneId, degree) {
     toneContext.temperament,
   );
 
+  const toneEntry = {
+    pending: true,
+    requestedStop: false,
+    source: null,
+    gainNode: null,
+    startedAtMs: 0,
+    stopTimeoutId: null,
+  };
+  state.heldTones.set(toneId, toneEntry);
+
   try {
     const context = await ensureAudioContext();
-    await preloadPianoSamples();
 
     const mapping = mapTargetHzToSample(frequency);
     validateMapping(mapping, frequency);
     const buffer = await ensureSampleBuffer(context, mapping.sampleId);
+
+    const activeEntry = state.heldTones.get(toneId);
+    if (!activeEntry || activeEntry !== toneEntry) {
+      return;
+    }
 
     const startAt = context.currentTime;
     const source = context.createBufferSource();
@@ -1165,7 +1179,14 @@ async function startHeldTone(toneId, degree) {
     gainNode.connect(context.destination);
     source.start(startAt);
 
-    state.heldTones.set(toneId, { source, gainNode });
+    toneEntry.pending = false;
+    toneEntry.source = source;
+    toneEntry.gainNode = gainNode;
+    toneEntry.startedAtMs = performance.now();
+
+    if (toneEntry.requestedStop) {
+      stopHeldTone(toneId);
+    }
   } catch (error) {
     if (ENABLE_OSCILLATOR_FALLBACK) {
       const fallbackTone = startHeldOscillatorTone(frequency);
@@ -1174,14 +1195,42 @@ async function startHeldTone(toneId, degree) {
         return;
       }
     }
+    state.heldTones.delete(toneId);
     showGlobalError(error.message || "Failed to play held piano tone");
   }
 }
 
-function stopHeldTone(toneId) {
+function stopHeldTone(toneId, force = false) {
   const tone = state.heldTones.get(toneId);
   if (!tone) {
     return;
+  }
+
+  if (tone.pending || !tone.source || !tone.gainNode) {
+    tone.requestedStop = true;
+    return;
+  }
+
+  if (!force) {
+    const elapsedMs = performance.now() - (tone.startedAtMs || 0);
+    if (elapsedMs < MIN_HELD_TONE_MS) {
+      if (!tone.stopTimeoutId) {
+        tone.stopTimeoutId = window.setTimeout(() => {
+          const activeTone = state.heldTones.get(toneId);
+          if (!activeTone) {
+            return;
+          }
+          activeTone.stopTimeoutId = null;
+          stopHeldTone(toneId, true);
+        }, MIN_HELD_TONE_MS - elapsedMs);
+      }
+      return;
+    }
+  }
+
+  if (tone.stopTimeoutId) {
+    window.clearTimeout(tone.stopTimeoutId);
+    tone.stopTimeoutId = null;
   }
 
   const context = state.audioCtx;
