@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from array import array
 import json
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -19,9 +19,15 @@ if str(REPO_ROOT) not in sys.path:
 from app.domain.audio_samples import build_sample_specs, get_unique_target_frequencies, worst_mapping_error
 
 SOURCE_BASE_URL = "https://theremin.music.uiowa.edu/sound%20files/MIS/Piano_Other/piano"
-TARGET_PEAK_DB = -6.0
-MAX_GAIN_DB = 60.0
-MIN_GAIN_DB = -60.0
+LOUDNESS_I_LUFS = -20.0
+LOUDNESS_LRA = 7.0
+LOUDNESS_TRUE_PEAK_DBTP = -2.0
+PRE_ATTACK_MS = 5
+ONSET_THRESHOLD_RATIO = 0.08
+ONSET_THRESHOLD_FLOOR = 0.003
+ONSET_MIN_STREAK = 96
+FADE_IN_SEC = 0.003
+FADE_OUT_SEC = 0.08
 
 
 def parse_args() -> argparse.Namespace:
@@ -74,17 +80,12 @@ def download_sources(cache_dir: Path) -> list[Path]:
     return source_paths
 
 
-def _probe_max_volume(input_path: Path, duration: float, sample_rate: int, fade_out: float) -> float:
-    filter_chain = (
-        f"aformat=channel_layouts=mono,afade=t=in:st=0:d=0.015,afade=t=out:st={fade_out:.3f}:d=0.14,"
-        "volumedetect"
-    )
-    analysis_cmd = [
+def detect_onset_seconds(input_path: Path, sample_rate: int) -> float:
+    ffmpeg_cmd = [
         "ffmpeg",
         "-hide_banner",
         "-loglevel",
-        "info",
-        "-nostats",
+        "error",
         "-i",
         str(input_path),
         "-vn",
@@ -92,35 +93,69 @@ def _probe_max_volume(input_path: Path, duration: float, sample_rate: int, fade_
         "1",
         "-ar",
         str(sample_rate),
-        "-af",
-        filter_chain,
-        "-t",
-        f"{duration:.3f}",
         "-f",
-        "null",
+        "f32le",
         "-",
     ]
-    proc = subprocess.run(
-        analysis_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        check=True,
-    )
-    match = re.search(r"max_volume:\s*(-?[0-9.]+)\s*dB", proc.stdout)
-    if not match:
-        raise RuntimeError("Unable to parse max_volume from volumedetect output")
-    return float(match.group(1))
+    proc = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    samples = array("f")
+    samples.frombytes(proc.stdout)
+
+    if not samples:
+        return 0.0
+
+    peak_abs = 0.0
+    for value in samples:
+        abs_value = abs(value)
+        if abs_value > peak_abs:
+            peak_abs = abs_value
+
+    if peak_abs <= 0.0:
+        return 0.0
+
+    threshold = max(peak_abs * ONSET_THRESHOLD_RATIO, ONSET_THRESHOLD_FLOOR)
+    streak = 0
+    for index, value in enumerate(samples):
+        if abs(value) >= threshold:
+            streak += 1
+            if streak >= ONSET_MIN_STREAK:
+                onset_index = index - ONSET_MIN_STREAK + 1
+                return onset_index / sample_rate
+        else:
+            streak = 0
+
+    return 0.0
 
 
-def run_ffmpeg(input_path: Path, output_path: Path, duration: float, sample_rate: int, bitrate: str) -> None:
-    fade_out = max(duration - 0.15, 0.01)
-    max_volume = _probe_max_volume(input_path, duration=duration, sample_rate=sample_rate, fade_out=fade_out)
-    gain_db = max(TARGET_PEAK_DB - max_volume, MIN_GAIN_DB)
-    gain_db = min(gain_db, MAX_GAIN_DB)
-    filter_chain = (
-        f"aformat=channel_layouts=mono,afade=t=in:st=0:d=0.015,afade=t=out:st={fade_out:.3f}:d=0.14,"
-        f"volume={gain_db:.4f}dB"
+def run_ffmpeg(
+    input_path: Path,
+    output_path: Path,
+    duration: float,
+    sample_rate: int,
+    bitrate: str,
+    trim_start_sec: float,
+) -> None:
+    fade_out_start = max(duration - FADE_OUT_SEC, 0.01)
+    filter_chain = ",".join(
+        [
+            "aformat=channel_layouts=mono",
+            f"aresample={sample_rate}",
+            f"atrim=start={trim_start_sec:.6f}",
+            "asetpts=PTS-STARTPTS",
+            (
+                "loudnorm="
+                f"I={LOUDNESS_I_LUFS:.1f}:"
+                f"LRA={LOUDNESS_LRA:.1f}:"
+                f"TP={LOUDNESS_TRUE_PEAK_DBTP:.1f}:"
+                "linear=true:"
+                "dual_mono=true"
+            ),
+            f"adelay={PRE_ATTACK_MS}:all=1",
+            f"apad=pad_dur={duration:.3f}",
+            f"atrim=start=0:end={duration:.3f}",
+            f"afade=t=in:st=0:d={FADE_IN_SEC:.3f}",
+            f"afade=t=out:st={fade_out_start:.3f}:d={FADE_OUT_SEC:.3f}",
+        ]
     )
     ffmpeg_cmd = [
         "ffmpeg",
@@ -137,12 +172,12 @@ def run_ffmpeg(input_path: Path, output_path: Path, duration: float, sample_rate
         str(sample_rate),
         "-af",
         filter_chain,
-        "-t",
-        f"{duration:.3f}",
         "-c:a",
         "aac",
         "-b:a",
         bitrate,
+        "-movflags",
+        "+faststart",
         str(output_path),
     ]
     subprocess.run(ffmpeg_cmd, check=True)
@@ -154,20 +189,40 @@ def build_audio_assets(
     duration: float,
     sample_rate: int,
     bitrate: str,
-) -> None:
+) -> dict[str, float]:
     output_dir.mkdir(parents=True, exist_ok=True)
     download_sources(cache_dir)
+    onset_map: dict[str, float] = {}
 
     for spec in build_sample_specs():
         source_path = cache_dir / spec.source_filename
         output_path = output_dir / spec.output_filename
-        run_ffmpeg(source_path, output_path, duration=duration, sample_rate=sample_rate, bitrate=bitrate)
+        onset_sec = detect_onset_seconds(source_path, sample_rate=sample_rate)
+        onset_map[spec.id] = onset_sec
+        run_ffmpeg(
+            source_path,
+            output_path,
+            duration=duration,
+            sample_rate=sample_rate,
+            bitrate=bitrate,
+            trim_start_sec=onset_sec,
+        )
+    return onset_map
 
 
-def write_manifest(output_dir: Path, duration: float, sample_rate: int, bitrate: str) -> dict:
+def write_manifest(
+    output_dir: Path,
+    duration: float,
+    sample_rate: int,
+    bitrate: str,
+    onset_map: dict[str, float],
+) -> dict:
     sample_specs = build_sample_specs()
     targets = get_unique_target_frequencies()
     max_error_cents, worst = worst_mapping_error(targets=targets, sample_specs=sample_specs)
+    onset_values = list(onset_map.values())
+    onset_min_ms = int(round(min(onset_values) * 1000)) if onset_values else 0
+    onset_max_ms = int(round(max(onset_values) * 1000)) if onset_values else 0
 
     manifest = {
         "version": 1,
@@ -178,9 +233,21 @@ def write_manifest(output_dir: Path, duration: float, sample_rate: int, bitrate:
         "codec": "aac",
         "bitrate": bitrate,
         "normalization": {
-            "type": "peak",
-            "targetPeakDb": TARGET_PEAK_DB,
-            "gainClampDb": {"min": MIN_GAIN_DB, "max": MAX_GAIN_DB},
+            "type": "loudnorm",
+            "integratedLufs": LOUDNESS_I_LUFS,
+            "lra": LOUDNESS_LRA,
+            "truePeakDbtp": LOUDNESS_TRUE_PEAK_DBTP,
+        },
+        "preprocess": {
+            "onsetDetection": {
+                "thresholdRatio": ONSET_THRESHOLD_RATIO,
+                "thresholdFloor": ONSET_THRESHOLD_FLOOR,
+                "minStreakSamples": ONSET_MIN_STREAK,
+            },
+            "trimStartMsRangeBeforePadding": [onset_min_ms, onset_max_ms],
+            "preAttackMs": PRE_ATTACK_MS,
+            "fadeInMs": int(round(FADE_IN_SEC * 1000)),
+            "fadeOutMs": int(round(FADE_OUT_SEC * 1000)),
         },
         "sampleCount": len(sample_specs),
         "targetFrequencyCount": len(targets),
@@ -238,7 +305,7 @@ def main() -> None:
     if args.clean and output_dir.exists():
         shutil.rmtree(output_dir)
 
-    build_audio_assets(
+    onset_map = build_audio_assets(
         output_dir=output_dir,
         cache_dir=cache_dir,
         duration=args.duration,
@@ -250,6 +317,7 @@ def main() -> None:
         duration=args.duration,
         sample_rate=args.sample_rate,
         bitrate=args.bitrate,
+        onset_map=onset_map,
     )
     total_bytes, total_mb = enforce_size_budget(
         output_dir=output_dir,

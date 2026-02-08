@@ -7,12 +7,24 @@
   "codec": "aac",
   "bitrate": "128k",
   "normalization": {
-    "type": "peak",
-    "targetPeakDb": -6.0,
-    "gainClampDb": {
-      "min": -60.0,
-      "max": 60.0
-    }
+    "type": "loudnorm",
+    "integratedLufs": -20.0,
+    "lra": 7.0,
+    "truePeakDbtp": -2.0
+  },
+  "preprocess": {
+    "onsetDetection": {
+      "thresholdRatio": 0.08,
+      "thresholdFloor": 0.003,
+      "minStreakSamples": 96
+    },
+    "trimStartMsRangeBeforePadding": [
+      0,
+      473
+    ],
+    "preAttackMs": 5,
+    "fadeInMs": 3,
+    "fadeOutMs": 80
   },
   "sampleCount": 35,
   "targetFrequencyCount": 299,

@@ -79,7 +79,11 @@ The app ships with a compact piano sample set in `web/assets/audio/piano/`:
 - `manifest.json` with sample metadata and mapping diagnostics
 - runtime mapping from target note Hz to nearest sample + `playbackRate`
 - hard pitch error guard: `abs(centsError) <= 20` (`< 0.2` semitone)
-- samples are peak-normalized to a unified loudness target (`targetPeakDb = -6.0`)
+- samples are rebuilt with onset alignment and loudness normalization:
+  - per-sample onset detection and trim
+  - fixed `5ms` pre-attack padding for consistent start timing
+  - `loudnorm` targeting `-20 LUFS`, `TP -2 dBTP`
+  - fixed length `2000ms` for all files
 - source set: University of Iowa MIS Piano (`mf`)
 
 Current package size target/hard cap:
@@ -186,7 +190,7 @@ docker compose up -d --build
 
 - Press and hold `1-7` to sustain tones
 - Release key to stop tone
-- Very short taps still play with a minimum audible key-press envelope (piano-like response)
+- Very short taps still play with a minimum `300ms` audible key-press envelope (piano-like response)
 - App tab must be focused
 - Press `Home` key to return to Dashboard quickly
 

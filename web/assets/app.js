@@ -10,11 +10,7 @@ const MAX_CENTS_ERROR = 20;
 const ENABLE_OSCILLATOR_FALLBACK = true;
 const HELD_TONE_ATTACK_SEC = 0.003;
 const HELD_TONE_RELEASE_SEC = 0.08;
-const MIN_HELD_TONE_MS = 220;
-const SAMPLE_PRE_ATTACK_SEC = 0.005;
-const SAMPLE_ONSET_THRESHOLD_FLOOR = 0.003;
-const SAMPLE_ONSET_THRESHOLD_RATIO = 0.08;
-const SAMPLE_ONSET_MIN_STREAK = 96;
+const MIN_HELD_TONE_MS = 300;
 const TONE_LENGTH_OPTIONS = [
   { id: "short", label: "Short (900ms)", durationMs: NOTE_DURATION_SHORT_MS },
   { id: "normal", label: "Normal (1300ms)", durationMs: NOTE_DURATION_NORMAL_MS },
@@ -64,7 +60,6 @@ const state = {
   audioManifest: null,
   sampleById: new Map(),
   sampleBufferCache: new Map(),
-  sampleOnsetSecCache: new Map(),
   sampleLoadPromise: null,
   keyboardTonePlan: null,
 };
@@ -339,7 +334,7 @@ function warmAudioForCurrentSettings(options = {}) {
         getOrCreateAudioContext();
       }
       await preloadKeyboardSamples();
-      void preloadPianoSamples().catch(() => {});
+      await preloadPianoSamples();
     } catch {
       // Warm-up is best-effort. Explicit playback paths show user-visible errors.
     }
@@ -1022,9 +1017,6 @@ async function ensureSampleBuffer(context, sampleId) {
   const encoded = await response.arrayBuffer();
   const decoded = await decodeAudioData(context, encoded);
   state.sampleBufferCache.set(sampleId, decoded);
-  if (!state.sampleOnsetSecCache.has(sampleId)) {
-    state.sampleOnsetSecCache.set(sampleId, detectSampleOnsetSec(decoded));
-  }
   return decoded;
 }
 
@@ -1074,68 +1066,6 @@ function mapTargetHzToSample(targetHz) {
     playbackRate: targetHz / nearestSample.hz,
     centsError,
   };
-}
-
-function detectSampleOnsetSec(buffer) {
-  if (!buffer || !buffer.length || !buffer.sampleRate) {
-    return 0;
-  }
-
-  const channels = [];
-  for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
-    channels.push(buffer.getChannelData(channel));
-  }
-
-  let peakAbs = 0;
-  for (let index = 0; index < buffer.length; index += 1) {
-    let sampleAbs = 0;
-    for (const channelData of channels) {
-      const value = Math.abs(channelData[index] || 0);
-      if (value > sampleAbs) {
-        sampleAbs = value;
-      }
-    }
-    if (sampleAbs > peakAbs) {
-      peakAbs = sampleAbs;
-    }
-  }
-
-  if (peakAbs <= 0) {
-    return 0;
-  }
-
-  const threshold = Math.max(peakAbs * SAMPLE_ONSET_THRESHOLD_RATIO, SAMPLE_ONSET_THRESHOLD_FLOOR);
-  let streak = 0;
-  let streakStart = 0;
-
-  for (let index = 0; index < buffer.length; index += 1) {
-    let sampleAbs = 0;
-    for (const channelData of channels) {
-      const value = Math.abs(channelData[index] || 0);
-      if (value > sampleAbs) {
-        sampleAbs = value;
-      }
-    }
-
-    if (sampleAbs >= threshold) {
-      if (streak === 0) {
-        streakStart = index;
-      }
-      streak += 1;
-      if (streak >= SAMPLE_ONSET_MIN_STREAK) {
-        return streakStart / buffer.sampleRate;
-      }
-    } else {
-      streak = 0;
-    }
-  }
-
-  return 0;
-}
-
-function getSampleStartOffsetSec(mapping) {
-  const onsetSec = state.sampleOnsetSecCache.get(mapping.sampleId) || 0;
-  return Math.max(0, onsetSec - SAMPLE_PRE_ATTACK_SEC);
 }
 
 function validateMapping(mapping, targetHz) {
@@ -1355,18 +1285,17 @@ function startHeldToneFromBuffer(toneEntry, context, buffer, mapping) {
   const startAt = context.currentTime;
   const source = context.createBufferSource();
   const gainNode = context.createGain();
-  const startOffset = getSampleStartOffsetSec(mapping);
 
   source.buffer = buffer;
   source.playbackRate.setValueAtTime(mapping.playbackRate, startAt);
-  configureHeldLoopWindow(source, buffer, mapping);
+  configureHeldLoopWindow(source, buffer);
 
   gainNode.gain.setValueAtTime(0.0001, startAt);
   gainNode.gain.exponentialRampToValueAtTime(HELD_TONE_GAIN, startAt + HELD_TONE_ATTACK_SEC);
 
   source.connect(gainNode);
   gainNode.connect(context.destination);
-  source.start(startAt, startOffset);
+  source.start(startAt);
 
   toneEntry.pending = false;
   toneEntry.source = source;
@@ -1422,10 +1351,9 @@ function stopHeldTone(toneId, force = false) {
   state.heldTones.delete(toneId);
 }
 
-function configureHeldLoopWindow(source, buffer, mapping) {
+function configureHeldLoopWindow(source, buffer) {
   const fadeOutSeconds = 0.18;
-  const onsetSec = (mapping && state.sampleOnsetSecCache.get(mapping.sampleId)) || 0;
-  const loopStart = Math.max(0.02, onsetSec + 0.02);
+  const loopStart = 0.03;
   const loopEnd = Math.max(loopStart + 0.12, buffer.duration - fadeOutSeconds);
   if (loopEnd <= loopStart) {
     return;
@@ -1590,7 +1518,6 @@ function scheduleSampleTone(context, frequency, mapping, startAt, durationSec) {
   const gainNode = context.createGain();
   const peakGain = 0.92;
   const releaseAt = Math.max(startAt + 0.03, startAt + durationSec - 0.08);
-  const startOffset = getSampleStartOffsetSec(mapping);
 
   source.buffer = buffer;
   source.playbackRate.setValueAtTime(mapping.playbackRate, startAt);
@@ -1603,7 +1530,7 @@ function scheduleSampleTone(context, frequency, mapping, startAt, durationSec) {
   source.connect(gainNode);
   gainNode.connect(context.destination);
 
-  source.start(startAt, startOffset);
+  source.start(startAt);
   source.stop(startAt + durationSec + 0.02);
 }
 
