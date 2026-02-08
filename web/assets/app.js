@@ -3,9 +3,9 @@ const PIANO_MANIFEST_PATH = "/assets/audio/piano/manifest.json";
 const NOTE_DURATION_MS = 820;
 const NOTE_GAP_MS = 250;
 const SETTINGS_VERSION = 2;
-const HELD_TONE_GAIN = 0.24;
+const HELD_TONE_GAIN = 0.65;
 const MAX_CENTS_ERROR = 20;
-const ENABLE_OSCILLATOR_FALLBACK = false;
+const ENABLE_OSCILLATOR_FALLBACK = true;
 const HELD_TONE_ATTACK_SEC = 0.008;
 const HELD_TONE_RELEASE_SEC = 0.05;
 const MIN_HELD_TONE_MS = 140;
@@ -1340,7 +1340,21 @@ async function playNotes(notes) {
     await sleep(totalMs);
   } catch (error) {
     if (ENABLE_OSCILLATOR_FALLBACK) {
-      showGlobalError("Sample playback failed; enable fallback mode for oscillator debugging.");
+      try {
+        const context = await ensureAudioContext();
+        const start = context.currentTime + 0.02;
+        const durationSec = NOTE_DURATION_MS / 1000;
+        const gapSec = NOTE_GAP_MS / 1000;
+        notes.forEach((note, index) => {
+          const at = start + index * (durationSec + gapSec);
+          scheduleOscillatorTone(context, note.frequency, at, durationSec);
+        });
+        const totalMs = notes.length * NOTE_DURATION_MS + (notes.length - 1) * NOTE_GAP_MS + 120;
+        await sleep(totalMs);
+        showGlobalError("Sample playback failed. Using oscillator fallback.");
+      } catch {
+        showGlobalError(error.message || "Failed to play tones");
+      }
     } else {
       showGlobalError(error.message || "Failed to play piano samples");
     }
@@ -1362,7 +1376,7 @@ function scheduleSampleTone(context, frequency, mapping, startAt, durationSec) {
 
   const source = context.createBufferSource();
   const gainNode = context.createGain();
-  const peakGain = 0.36;
+  const peakGain = 0.92;
   const releaseAt = Math.max(startAt + 0.03, startAt + durationSec - 0.08);
 
   source.buffer = buffer;
