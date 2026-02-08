@@ -131,7 +131,8 @@ h2 {
   margin-top: 0.85rem;
   display: grid;
   gap: 0.8rem;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  align-items: start;
 }
 
 label {
@@ -139,6 +140,7 @@ label {
   gap: 0.35rem;
   color: var(--subtle);
   font-weight: 500;
+  min-width: 0;
 }
 
 select,
@@ -152,6 +154,9 @@ select,
 
 select {
   padding: 0 0.7rem;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .checkbox-line {
@@ -484,6 +489,12 @@ select {
   .button-row .btn {
     width: auto;
     min-width: 64px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .settings-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 

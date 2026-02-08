@@ -436,6 +436,7 @@ async function startSession(moduleId) {
     state.currentAnswered = false;
 
     await ensureAudioContext();
+    await preloadKeyboardSamples();
     await preloadPianoSamples();
     navigateToView("quizView");
     renderCurrentQuestion();
@@ -1235,7 +1236,14 @@ async function startHeldTone(toneId, degree) {
     if (!buffer && ENABLE_OSCILLATOR_FALLBACK) {
       const fallbackTone = startHeldOscillatorTone(frequency);
       if (fallbackTone) {
+        fallbackTone.pending = false;
+        fallbackTone.requestedStop = false;
+        fallbackTone.startedAtMs = performance.now();
+        fallbackTone.stopTimeoutId = null;
         state.heldTones.set(toneId, fallbackTone);
+        if (toneEntry.requestedStop) {
+          stopHeldTone(toneId);
+        }
         void ensureSampleBuffer(context, mapping.sampleId).catch(() => {});
         return;
       }
@@ -1502,7 +1510,14 @@ function startHeldOscillatorTone(frequency) {
   gainNode.connect(context.destination);
   source.start(startAt);
 
-  return { source, gainNode };
+  return {
+    source,
+    gainNode,
+    pending: false,
+    requestedStop: false,
+    startedAtMs: performance.now(),
+    stopTimeoutId: null,
+  };
 }
 
 function scheduleOscillatorTone(context, frequency, startAt, durationSec) {
