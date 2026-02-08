@@ -1,14 +1,21 @@
 const API_BASE = "/api/v1";
 const PIANO_MANIFEST_PATH = "/assets/audio/piano/manifest.json";
-const NOTE_DURATION_MS = 820;
+const NOTE_DURATION_SHORT_MS = 900;
+const NOTE_DURATION_NORMAL_MS = 1300;
+const NOTE_DURATION_FULL_MS = 2000;
 const NOTE_GAP_MS = 250;
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
 const HELD_TONE_GAIN = 0.65;
 const MAX_CENTS_ERROR = 20;
 const ENABLE_OSCILLATOR_FALLBACK = true;
 const HELD_TONE_ATTACK_SEC = 0.008;
 const HELD_TONE_RELEASE_SEC = 0.05;
 const MIN_HELD_TONE_MS = 140;
+const TONE_LENGTH_OPTIONS = [
+  { id: "short", label: "Short (900ms)", durationMs: NOTE_DURATION_SHORT_MS },
+  { id: "normal", label: "Normal (1300ms)", durationMs: NOTE_DURATION_NORMAL_MS },
+  { id: "full", label: "Full (2000ms)", durationMs: NOTE_DURATION_FULL_MS },
+];
 const JUST_INTONATION_RATIOS = [
   1 / 1,
   16 / 15,
@@ -89,6 +96,7 @@ function cacheElements() {
   ui.genderSelect = document.getElementById("genderSelect");
   ui.keySelect = document.getElementById("keySelect");
   ui.temperamentSelect = document.getElementById("temperamentSelect");
+  ui.toneLengthSelect = document.getElementById("toneLengthSelect");
   ui.showVisualHints = document.getElementById("showVisualHints");
   ui.quizShowVisualHints = document.getElementById("quizShowVisualHints");
 
@@ -130,6 +138,9 @@ function bindStaticEvents() {
   ui.genderSelect.addEventListener("change", onSettingsChange);
   ui.keySelect.addEventListener("change", onSettingsChange);
   ui.temperamentSelect.addEventListener("change", onSettingsChange);
+  if (ui.toneLengthSelect) {
+    ui.toneLengthSelect.addEventListener("change", onSettingsChange);
+  }
 
   ui.showVisualHints.addEventListener("change", () => {
     setVisualHints(ui.showVisualHints.checked);
@@ -143,7 +154,7 @@ function bindStaticEvents() {
   });
 
   ui.repeatBtn.addEventListener("click", () => {
-    void playCurrentQuestion();
+    void playCurrentQuestion({ mode: "repeat" });
   });
 
   ui.showAnswerBtn.addEventListener("click", () => {
@@ -253,6 +264,7 @@ function hydrateSettings() {
       gender: state.meta.defaults.gender,
       key: state.meta.defaults.key,
       temperament: state.meta.defaults.temperament,
+      toneLength: "normal",
       showVisualHints: state.meta.defaults.showVisualHints,
     };
     persistSettings();
@@ -264,6 +276,7 @@ function hydrateSettings() {
     gender: saved.gender || state.meta.defaults.gender,
     key: saved.key || state.meta.defaults.key,
     temperament: saved.temperament || state.meta.defaults.temperament,
+    toneLength: saved.toneLength || "normal",
     showVisualHints:
       typeof saved.showVisualHints === "boolean"
         ? saved.showVisualHints
@@ -275,6 +288,9 @@ function renderSettingsControls() {
   renderSelect(ui.genderSelect, state.meta.genders, state.settings.gender);
   renderSelect(ui.keySelect, state.meta.keys, state.settings.key);
   renderSelect(ui.temperamentSelect, state.meta.temperaments, state.settings.temperament);
+  if (ui.toneLengthSelect) {
+    renderSelect(ui.toneLengthSelect, TONE_LENGTH_OPTIONS, state.settings.toneLength);
+  }
 
   ui.showVisualHints.checked = state.settings.showVisualHints;
   ui.quizShowVisualHints.checked = state.settings.showVisualHints;
@@ -299,7 +315,9 @@ function onSettingsChange() {
   state.settings.gender = ui.genderSelect.value;
   state.settings.key = ui.keySelect.value;
   state.settings.temperament = ui.temperamentSelect.value;
+  state.settings.toneLength = ui.toneLengthSelect?.value || state.settings.toneLength || "normal";
   persistSettings();
+  void preloadKeyboardSamples().catch(() => {});
 }
 
 function setVisualHints(enabled) {
@@ -456,7 +474,7 @@ function renderCurrentQuestion() {
   renderAnswerArea(question);
 
   window.setTimeout(() => {
-    void playCurrentQuestion();
+    void playCurrentQuestion({ mode: "auto" });
   }, 80);
 }
 
@@ -906,7 +924,7 @@ function renderResult(correctCount, total, accuracy, wrongItems) {
     replay.type = "button";
     replay.textContent = "Replay";
     replay.addEventListener("click", () => {
-      void playNotes(item.question.notes);
+      void playNotes(item.question.notes, { durationMs: NOTE_DURATION_FULL_MS });
     });
 
     card.append(title, prompt, yourAnswer, rightAnswer, replay);
@@ -1032,35 +1050,71 @@ function validateMapping(mapping, targetHz) {
   );
 }
 
+function resolveToneLengthDurationMs(toneLengthId) {
+  const found = TONE_LENGTH_OPTIONS.find((item) => item.id === toneLengthId);
+  return found ? found.durationMs : NOTE_DURATION_NORMAL_MS;
+}
+
+function getAutoPlayDurationMs() {
+  return resolveToneLengthDurationMs(state.settings?.toneLength || "normal");
+}
+
+async function preloadKeyboardSamples() {
+  if (!state.audioManifest || !state.meta) {
+    return;
+  }
+
+  const toneContext = getToneContext();
+  if (!toneContext) {
+    return;
+  }
+
+  const context = await ensureAudioContext();
+  const sampleIds = new Set();
+  for (let degree = 1; degree <= 7; degree += 1) {
+    const semitone = NATURAL_DEGREE_TO_SEMITONE[degree];
+    const frequency = calculateFrequencyForSemitone(
+      semitone,
+      toneContext.doFrequency,
+      toneContext.temperament,
+    );
+    const mapping = mapTargetHzToSample(frequency);
+    validateMapping(mapping, frequency);
+    sampleIds.add(mapping.sampleId);
+  }
+
+  await Promise.all(Array.from(sampleIds).map((sampleId) => ensureSampleBuffer(context, sampleId)));
+}
+
 function warmAudioPipelineOnce() {
   void (async () => {
     try {
       await ensureAudioContext();
+      await preloadKeyboardSamples();
     } catch {
       // Warm-up is opportunistic; explicit playback paths handle user-visible errors.
     }
   })();
 }
 
-async function playCurrentQuestion() {
+async function playCurrentQuestion(options = {}) {
   const question = currentQuestion();
   if (!question) {
     return;
   }
 
-  await playNotes(question.notes);
+  const mode = options.mode || "auto";
+  const durationMs = mode === "repeat" ? NOTE_DURATION_FULL_MS : getAutoPlayDurationMs();
+  await playNotes(question.notes, { durationMs });
 }
 
 function handleGlobalToneKeydown(event) {
   if (event.ctrlKey || event.metaKey || event.altKey) {
     return;
   }
-  if (!document.hasFocus()) {
-    return;
-  }
 
   const targetTag = (event.target?.tagName || "").toLowerCase();
-  if (targetTag === "input" || targetTag === "textarea" || targetTag === "select") {
+  if (targetTag === "input" || targetTag === "textarea") {
     return;
   }
 
@@ -1176,7 +1230,20 @@ async function startHeldTone(toneId, degree) {
 
     const mapping = mapTargetHzToSample(frequency);
     validateMapping(mapping, frequency);
-    const buffer = await ensureSampleBuffer(context, mapping.sampleId);
+    let buffer = state.sampleBufferCache.get(mapping.sampleId) || null;
+
+    if (!buffer && ENABLE_OSCILLATOR_FALLBACK) {
+      const fallbackTone = startHeldOscillatorTone(frequency);
+      if (fallbackTone) {
+        state.heldTones.set(toneId, fallbackTone);
+        void ensureSampleBuffer(context, mapping.sampleId).catch(() => {});
+        return;
+      }
+    }
+
+    if (!buffer) {
+      buffer = await ensureSampleBuffer(context, mapping.sampleId);
+    }
 
     const activeEntry = state.heldTones.get(toneId);
     if (!activeEntry || activeEntry !== toneEntry) {
@@ -1323,10 +1390,12 @@ function calculateFrequencyForSemitone(semitone, doFrequency, temperament) {
   return doFrequency * (2 ** (semitone / 12));
 }
 
-async function playNotes(notes) {
+async function playNotes(notes, options = {}) {
   if (!Array.isArray(notes) || !notes.length || state.isPlaying) {
     return;
   }
+
+  const durationMs = options.durationMs || NOTE_DURATION_NORMAL_MS;
 
   try {
     state.isPlaying = true;
@@ -1336,7 +1405,7 @@ async function playNotes(notes) {
     await preloadPianoSamples();
 
     const start = context.currentTime + 0.05;
-    const durationSec = NOTE_DURATION_MS / 1000;
+    const durationSec = durationMs / 1000;
     const gapSec = NOTE_GAP_MS / 1000;
     const mappings = notes.map((note) => {
       const mapping = mapTargetHzToSample(note.frequency);
@@ -1355,20 +1424,20 @@ async function playNotes(notes) {
       scheduleSampleTone(context, note.frequency, mappings[index], at, durationSec);
     });
 
-    const totalMs = notes.length * NOTE_DURATION_MS + (notes.length - 1) * NOTE_GAP_MS + 120;
+    const totalMs = notes.length * durationMs + (notes.length - 1) * NOTE_GAP_MS + 120;
     await sleep(totalMs);
   } catch (error) {
     if (ENABLE_OSCILLATOR_FALLBACK) {
       try {
         const context = await ensureAudioContext();
         const start = context.currentTime + 0.02;
-        const durationSec = NOTE_DURATION_MS / 1000;
+        const durationSec = durationMs / 1000;
         const gapSec = NOTE_GAP_MS / 1000;
         notes.forEach((note, index) => {
           const at = start + index * (durationSec + gapSec);
           scheduleOscillatorTone(context, note.frequency, at, durationSec);
         });
-        const totalMs = notes.length * NOTE_DURATION_MS + (notes.length - 1) * NOTE_GAP_MS + 120;
+        const totalMs = notes.length * durationMs + (notes.length - 1) * NOTE_GAP_MS + 120;
         await sleep(totalMs);
         showGlobalError("Sample playback failed. Using oscillator fallback.");
       } catch {

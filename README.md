@@ -23,6 +23,7 @@ The app supports repeated practice at the same difficulty level while keeping sc
   - Key (`1=C` through `1=B`)
   - Temperament (`equal_temperament`, `just_intonation`)
 - Repeat playback for each question
+- Tone length selector (`Short 900ms / Normal 1300ms / Full 2000ms`)
 - First-attempt scoring with optional retry on the same question
 - Optional `Show Answer` after first incorrect attempt
 - Visual hint mode (toggle on/off)
@@ -171,6 +172,7 @@ docker compose up -d --build
 3. Select a module and start.
 4. During quiz:
    - `Repeat` to replay the current audio
+   - Auto-play uses selected tone length, `Repeat` always uses full 2000ms
    - Answer the question
    - If first attempt is incorrect, score is locked for that question
    - You can retry for practice, or click `Show Answer`
