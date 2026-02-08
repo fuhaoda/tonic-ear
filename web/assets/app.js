@@ -11,6 +11,7 @@ const ENABLE_OSCILLATOR_FALLBACK = true;
 const HELD_TONE_ATTACK_SEC = 0.003;
 const HELD_TONE_RELEASE_SEC = 0.08;
 const MIN_HELD_TONE_MS = 300;
+const HELD_TONE_START_DELAY_MS = MIN_HELD_TONE_MS;
 const TONE_LENGTH_OPTIONS = [
   { id: "short", label: "Short (900ms)", durationMs: NOTE_DURATION_SHORT_MS },
   { id: "normal", label: "Normal (1300ms)", durationMs: NOTE_DURATION_NORMAL_MS },
@@ -62,6 +63,8 @@ const state = {
   sampleBufferCache: new Map(),
   sampleLoadPromise: null,
   keyboardTonePlan: null,
+  activeTonePresses: new Set(),
+  heldStartTimerByToneId: new Map(),
 };
 
 const ui = {};
@@ -1147,7 +1150,7 @@ function handleGlobalToneKeydown(event) {
   if (event.repeat) {
     return;
   }
-  void startHeldTone(getKeyboardToneId(event), degree);
+  handleTonePressStart(getKeyboardToneId(event), degree);
 }
 
 function goHomeView() {
@@ -1163,7 +1166,7 @@ function handleGlobalToneKeyup(event) {
   if (degree === null) {
     return;
   }
-  stopHeldTone(getKeyboardToneId(event));
+  handleTonePressEnd(getKeyboardToneId(event));
 }
 
 function resolveKeyboardDegree(event) {
@@ -1198,12 +1201,12 @@ function handleTouchKeyboardPointerDown(event) {
   event.preventDefault();
   button.classList.add("is-pressed");
   button.dataset.activePointerId = String(event.pointerId);
-  void startHeldTone(`touch:${event.pointerId}`, degree);
+  handleTonePressStart(`touch:${event.pointerId}`, degree);
 }
 
 function handleTouchKeyboardPointerEnd(event) {
   const toneId = `touch:${event.pointerId}`;
-  stopHeldTone(toneId);
+  handleTonePressEnd(toneId);
 
   const activeButton = ui.touchKeyboardButtons.querySelector(
     `button[data-active-pointer-id="${event.pointerId}"]`,
@@ -1211,6 +1214,75 @@ function handleTouchKeyboardPointerEnd(event) {
   if (activeButton) {
     activeButton.classList.remove("is-pressed");
     delete activeButton.dataset.activePointerId;
+  }
+}
+
+function handleTonePressStart(toneId, degree) {
+  if (state.activeTonePresses.has(toneId)) {
+    return;
+  }
+  state.activeTonePresses.add(toneId);
+  void playKeyboardTapTone(degree);
+  queueHeldToneStart(toneId, degree);
+}
+
+function handleTonePressEnd(toneId) {
+  state.activeTonePresses.delete(toneId);
+  cancelHeldToneStart(toneId);
+  stopHeldTone(toneId);
+}
+
+function queueHeldToneStart(toneId, degree) {
+  cancelHeldToneStart(toneId);
+  const timerId = window.setTimeout(() => {
+    state.heldStartTimerByToneId.delete(toneId);
+    if (!state.activeTonePresses.has(toneId)) {
+      return;
+    }
+    void startHeldTone(toneId, degree);
+  }, HELD_TONE_START_DELAY_MS);
+  state.heldStartTimerByToneId.set(toneId, timerId);
+}
+
+function cancelHeldToneStart(toneId) {
+  const timerId = state.heldStartTimerByToneId.get(toneId);
+  if (!timerId) {
+    return;
+  }
+  window.clearTimeout(timerId);
+  state.heldStartTimerByToneId.delete(toneId);
+}
+
+async function playKeyboardTapTone(degree) {
+  const keyboardPlan = ensureKeyboardTonePlan();
+  const toneSpec = keyboardPlan?.degreeMap.get(degree);
+  if (!toneSpec) {
+    return;
+  }
+
+  const { frequency, mapping } = toneSpec;
+  const durationSec = MIN_HELD_TONE_MS / 1000;
+
+  try {
+    const context = await ensureAudioContext();
+    let buffer = state.sampleBufferCache.get(mapping.sampleId) || null;
+    if (!buffer) {
+      buffer = await ensureSampleBuffer(context, mapping.sampleId);
+    }
+    const startAt = context.currentTime + 0.001;
+    scheduleSampleTone(context, frequency, mapping, startAt, durationSec);
+  } catch (error) {
+    if (ENABLE_OSCILLATOR_FALLBACK) {
+      try {
+        const context = await ensureAudioContext();
+        const startAt = context.currentTime + 0.001;
+        scheduleOscillatorTone(context, frequency, startAt, durationSec);
+      } catch {
+        showGlobalError(error.message || "Failed to play keyboard tap tone");
+      }
+    } else {
+      showGlobalError(error.message || "Failed to play keyboard tap tone");
+    }
   }
 }
 
@@ -1375,6 +1447,12 @@ function configureHeldLoopWindow(source, buffer) {
 }
 
 function stopAllHeldTones() {
+  for (const timerId of state.heldStartTimerByToneId.values()) {
+    window.clearTimeout(timerId);
+  }
+  state.heldStartTimerByToneId.clear();
+  state.activeTonePresses.clear();
+
   for (const toneId of Array.from(state.heldTones.keys())) {
     stopHeldTone(toneId);
   }

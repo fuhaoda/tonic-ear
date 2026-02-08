@@ -189,16 +189,18 @@ docker compose up -d --build
 
 ### Desktop keyboard
 
-- Press and hold `1-7` to sustain tones
-- Release key to stop tone
-- Very short taps still play with a minimum `300ms` audible key-press envelope (piano-like response)
+- Tap `1-7` for immediate piano-like notes
+- Hold key beyond `300ms` to continue into sustained tone
+- Release key to stop sustain
+- Every tap guarantees at least `300ms` audible output
 - App tab must be focused
 - Press `Home` key to return to Dashboard quickly
 
 ### Tablet/mobile touch keyboard
 
-- Press and hold `1-7` button to sustain tone
-- Release to stop tone
+- Tap `1-7` for immediate notes
+- Hold button beyond `300ms` to sustain
+- Release to stop sustain
 
 ## Visual Hint Behavior
 
