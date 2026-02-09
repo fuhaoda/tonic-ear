@@ -1,14 +1,14 @@
 const API_BASE = "/api/v1";
 const PIANO_MANIFEST_PATH = "/assets/audio/piano/manifest.json";
-const AUDIO_DEBUG_ENABLED = new URLSearchParams(window.location.search).has("audio_debug");
+const AUDIO_DEBUG_ENABLED = new URLSearchParams(window.location.search).get("audio_debug") === "1";
 
 const NOTE_GAP_MS = 250;
 const SETTINGS_VERSION = 4;
 const MAX_CENTS_ERROR = 10;
 const MAX_POLYPHONY = 5;
 const SAMPLE_PRELOAD_CONCURRENCY = 4;
-const AUDIO_DEBUG_LOG_LIMIT = 80;
-const AUDIO_UNLOCK_TIMEOUT_MS = 1500;
+const AUDIO_DEBUG_LOG_LIMIT = 40;
+const AUDIO_UNLOCK_TIMEOUT_MS = 500;
 
 const NATURAL_DEGREE_TO_SEMITONE = {
   1: 0,
@@ -46,6 +46,8 @@ const state = {
   activeVoices: [],
   audioDebugLines: [],
   audioUnlockFailures: 0,
+  lastAudioDebugMessage: "",
+  lastAudioSessionType: null,
 };
 
 const ui = {};
@@ -967,6 +969,10 @@ function appendAudioDebugLog(message) {
   if (!AUDIO_DEBUG_ENABLED || !ui.audioDebugLog) {
     return;
   }
+  if (message === state.lastAudioDebugMessage) {
+    return;
+  }
+  state.lastAudioDebugMessage = message;
   const now = new Date();
   const timestamp = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(
     now.getSeconds(),
@@ -1046,7 +1052,10 @@ function configureAudioSessionIfSupported() {
     if (audioSession.type !== "playback") {
       audioSession.type = "playback";
     }
-    appendAudioDebugLog(`navigator.audioSession.type='${audioSession.type}'`);
+    if (state.lastAudioSessionType !== audioSession.type) {
+      state.lastAudioSessionType = audioSession.type;
+      appendAudioDebugLog(`navigator.audioSession.type='${audioSession.type}'`);
+    }
   } catch (error) {
     appendAudioDebugLog(`navigator.audioSession failed: ${error?.message || "unknown error"}`);
   }
@@ -1294,7 +1303,6 @@ async function ensureSampleBuffer(context, sampleId) {
     const encoded = await response.arrayBuffer();
     const decoded = await decodeAudioData(context, encoded);
     state.sampleBufferCache.set(sampleId, decoded);
-    appendAudioDebugLog(`Decoded ${sampleId} (${Math.round(decoded.duration * 1000)}ms)`);
     return decoded;
   })()
     .catch((error) => {
