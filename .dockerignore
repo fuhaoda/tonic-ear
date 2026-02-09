@@ -16,6 +16,7 @@ __pycache__
 .vscode
 .idea
 *.log
+.cache
 
 # Runtime docs/tests not needed in image
 tests

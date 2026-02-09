@@ -1,33 +1,33 @@
 # Tonic Ear
 
-Tonic Ear is a web app for progressive ear training.
-It helps you improve pitch discrimination through structured drills, repeatable question sets, and immediate audio feedback.
+Tonic Ear is a progressive ear-training web app for pitch and scale recognition.
+It is built with FastAPI + vanilla JS and is designed for desktop, iPad, and iPhone browsers.
 
 ## Purpose
 
-Tonic Ear is designed to train:
+This app helps train:
 
-- Pitch height judgment (which note is higher/lower)
-- Relative ordering (sort 3 or 4 notes low to high)
-- Scale-step distance recognition
-- Single-note movable-do recognition without visual hint
+- Pitch comparison (which note is higher)
+- Note ordering (3-note / 4-note low-to-high sorting)
+- Scale-step interval distance
+- Single-note movable-do recognition
 
-The app supports repeated practice at the same difficulty level while keeping score based on first attempt.
+Each session has 20 questions with first-attempt scoring.
 
 ## Core Features
 
-- 20 questions per session, fixed by module
-- Progressive module ladder (L1 -> L6)
-- Global settings for:
+- 20-question fixed sessions
+- Module ladder with fixed difficulty per module
+- Settings:
   - Gender base Do (`male=130.8Hz`, `female=261.6Hz`)
-  - Key (`1=C` through `1=B`)
-  - Temperament (`equal_temperament`, `just_intonation`)
-- Repeat playback for each question
-- First-attempt scoring with optional retry on the same question
-- Optional `Show Answer` after first incorrect attempt
-- Visual hint mode (toggle on/off)
+  - Key (`1=C` to `1=B`)
+  - Temperament (`Equal` only)
+- Repeat playback during quiz
+- Optional visual pitch hints
+- First-attempt scoring + optional retry practice + show answer
 - Local progress persistence (`localStorage`)
-- Desktop keyboard tones (`1-7`) and mobile touch keyboard (`1-7`, press and hold)
+- Desktop keyboard `1-7` and mobile touch keyboard `1-7`
+- Browser history and top `Home` button navigation
 
 ## Modules
 
@@ -39,35 +39,61 @@ The app supports repeated practice at the same difficulty level while keeping sc
 
 ## Level Definitions
 
-`M2/M3/M4` use `L1..L6`:
+`M2/M3/M4` levels:
 
-- `L1` (Triad): only `1,3,5`
-- `L2` (Pentatonic): `1,2,3,5,6`
-- `L3` (Heptatonic): `1,2,3,4,5,6,7`
-- `L4` (Chromatic): full 12-note set (`1,#1,2,#2,3,4,#4,5,#5,6,#6,7`)
-- `L5` (Whole-tone proximity): notes are constrained to one whole tone apart (2 semitones)
-- `L6` (Semitone proximity): notes are constrained to one semitone apart
+- `L1`: Triad (`1,3,5`)
+- `L2`: Pentatonic (`1,2,3,5,6`)
+- `L3`: Heptatonic (`1,2,3,4,5,6,7`)
+- `L4`: Chromatic (`1,#1,2,#2,3,4,#4,5,#5,6,#6,7`)
+- `L5`: Whole-tone proximity (adjacent spacing = 2 semitones)
+- `L6`: Semitone proximity (adjacent spacing = 1 semitone)
 
-How spacing constraints apply:
+Notes:
 
-- `M2-L5/L6`: the two notes differ by exactly 2/1 semitones
-- `M3-L5/L6`: when sorted low to high, adjacent notes differ by 2/1 semitones
-- `M4-L5/L6`: when sorted low to high, adjacent notes differ by 2/1 semitones
+- `M4-L1` internally uses the `L2` pool so four unique notes are possible.
+- `MI` only supports `L1..L3`.
+- `MS` only supports `L1..L4`.
 
-Other module ranges:
+## Audio Architecture (Current)
 
-- `MI` supports `L1..L3` only
-- `MS` supports `L1..L4` only
+This version uses **raw piano samples only** for all playback (quiz + keyboard):
 
-Note: `M4-L1` internally uses the `L2` note pool because `L1` has only 3 unique notes and four-note sorting requires 4 unique notes.
+- Source: University of Iowa MIS Piano (`ff`)
+- Singing-focused range: **70-1000Hz** with dense semitone coverage (`D2..B5`, 46 files)
+- Output assets: `web/assets/audio/piano/`
+- File format: AAC `.m4a`, mono, 44.1kHz
+- Fixed duration: **1 second per sample**
+- Offline preprocessing only:
+  - start alignment (`silenceremove` at source head)
+  - peak normalization for consistent loudness
+- Runtime playback:
+  - WebAudio single engine only
+  - no oscillator fallback
+  - no runtime timbre shaping
+  - quiz playback always uses full raw sample length
+  - keyboard playback always triggers full 1-second one-shot per tap
+  - polyphony cap = 5 active voices (extra taps are ignored until a voice slot frees)
 
-## Tech Stack
+Current built package size is about **0.82MB** for 46 samples.
 
-- Backend: FastAPI
-- Frontend: Vanilla HTML/CSS/JavaScript
-- Audio: WebAudio API
-- Tests: pytest + FastAPI TestClient
-- Deployment: local Python or Docker
+## Build/Rebuild Piano Samples
+
+Requirements:
+
+- `python3`
+- `ffmpeg`
+- internet access to the Iowa source files
+
+Command:
+
+```bash
+python3 scripts/build_piano_samples.py --clean --refresh-sources --duration 1.0 --bitrate 160k
+```
+
+This regenerates:
+
+- `web/assets/audio/piano/*.m4a` (46 files)
+- `web/assets/audio/piano/manifest.json`
 
 ## Quick Start (Local)
 
@@ -80,103 +106,112 @@ uvicorn app.main:app --host 0.0.0.0 --port 2121 --reload
 
 Open:
 
-- `http://localhost:2121` (recommended)
-- `http://127.0.0.1:2121` (recommended)
+- `http://localhost:2121`
+- `http://127.0.0.1:2121`
 
-Important:
-
-- `0.0.0.0` is the server bind address, not a reliable browser URL.
-- In Safari especially, avoid `http://0.0.0.0:2121`.
+Do not use `http://0.0.0.0:2121` in Safari.
 
 ## Docker Deployment
 
-### Prerequisites
-
-- Docker Engine / Docker Desktop installed
-- Docker daemon running (`docker info` should succeed)
-
-### Start with Docker Compose
+Build and run:
 
 ```bash
 docker compose up -d --build
 ```
 
-Open `http://localhost:2121`.
-
-### Verify container status
+Check:
 
 ```bash
 docker compose ps
 docker compose logs -f
 ```
 
-### Stop services
+Stop:
 
 ```bash
 docker compose down
 ```
 
-### Pull latest code and redeploy
+Default mapping is host `2121` -> container `8080`.
+
+## Update On Linux Server (Pull + Rebuild + Cleanup)
+
+SSH into your server and run:
 
 ```bash
-git pull
+cd /path/to/tonic-ear
+git fetch --all
+git checkout feature/raw-88-equal-webaudio-clean
+git pull --ff-only
+docker compose down
 docker compose up -d --build
+docker compose ps
 ```
 
-### Notes
+Open:
 
-- App listens on container port `8080`
-- Host port mapping is `2121:8080` (configured in `docker-compose.yml`)
-- If host port `2121` is occupied, change the `ports` mapping in `docker-compose.yml`
+- `http://<server-lan-ip>:2121`
+
+Example:
+
+- `http://192.168.86.45:2121`
+
+### Clean Unused Docker Data
+
+Safe cleanup (recommended first):
+
+```bash
+docker image prune -f
+docker builder prune -f
+```
+
+Deeper cleanup (removes all unused images/containers/networks/volumes):
+
+```bash
+docker system prune -a --volumes -f
+```
+
+Check disk usage before/after:
+
+```bash
+docker system df
+```
+
+## Home LAN Access
+
+If your Linux server LAN IP is `192.168.86.45`, devices on the same LAN can use:
+
+- `http://192.168.86.45:2121`
 
 ## How To Use
 
-1. Open Dashboard.
-2. Choose `Gender`, `Key`, and `Temperament`.
-3. Select a module and start.
-4. During quiz:
-   - `Repeat` to replay the current audio
-   - Answer the question
-   - If first attempt is incorrect, score is locked for that question
-   - You can retry for practice, or click `Show Answer`
-5. Click `Next` to move on.
-6. At the end, view score and mistake replay.
-7. Click the top `Home` button at any time to return to Dashboard.
+1. Choose `Gender`, `Key`, and `Temperament`.
+2. Start a module.
+3. Each question auto-plays once.
+4. Use `Repeat` as needed.
+5. Submit answer.
+6. If first attempt is wrong, score is locked but you can retry for practice or click `Show Answer`.
+7. Use `Next` to continue.
+8. Review score and mistake replay at the end.
 
-## Input Controls
+## Keyboard / Touch Control
 
-### Desktop keyboard
-
-- Press and hold `1-7` to sustain tones
-- Release key to stop tone
-- App tab must be focused
-- Press `Home` key to return to Dashboard quickly
-
-### Tablet/mobile touch keyboard
-
-- Press and hold `1-7` button to sustain tone
-- Release to stop tone
-
-## Visual Hint Behavior
-
-- Default: OFF
-- If enabled, quiz displays a 1-7 guide lane with note markers for compare/sort modules
-- Single-note module keeps visual hint hidden by design
+- Desktop: press `1..7`
+- Desktop modifiers: hold `Shift` while pressing `1..7` to shift up one octave
+- Desktop modifiers: hold `Ctrl` while pressing `1..7` to shift down one octave
+- Mobile/Tablet: tap `1..7` touch keyboard
+- Each tap triggers a full 1-second raw sample (independent of press length)
+- Up to 5 notes can overlap; above that new taps are dropped
 
 ## API
 
 ### `GET /api/v1/meta`
 
-Returns app metadata:
-
-- Settings options (gender/key/temperament)
-- Module definitions
-- Difficulty definitions
-- Defaults
+Returns settings options, module list, difficulty metadata, and defaults.
 
 ### `POST /api/v1/session`
 
-Request body:
+Request:
 
 ```json
 {
@@ -191,42 +226,31 @@ Response includes:
 
 - `sessionId`
 - `settings`
-- `questions` (20 items)
+- `questions` (20)
 
-## Data Persistence
+Each note payload now includes `sampleId` and `midi` for direct sample playback.
 
-Local browser storage keys:
+## Tests
+
+```bash
+source .venv/bin/activate
+pytest -q
+```
+
+Coverage includes:
+
+- Equal temperament frequency correctness
+- Module generation and constraints
+- 70-1000Hz sample-manifest checks (46 files)
+- `< 10 cents` mapping bound verification
+- API validation (`just_intonation` rejected)
+
+## Local Data
+
+Saved in browser local storage:
 
 - `tonicEar.settings`
 - `tonicEar.history`
 - `tonicEar.moduleStats`
 
-No account system is required for v1.
-
-## Testing
-
-```bash
-. .venv/bin/activate
-pytest -q
-```
-
-## Troubleshooting
-
-### Blank page in Safari
-
-Use `http://localhost:2121` instead of `http://0.0.0.0:2121`.
-
-### No sound on first interaction
-
-Some browsers block audio before user gesture.
-Click any button (for example `Repeat`) once, then audio playback is enabled.
-
-### Port conflict
-
-If `2121` is occupied, run with a different port:
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 3000 --reload
-```
-
-Then open `http://localhost:3000`.
+No account system in v1.

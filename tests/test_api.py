@@ -15,6 +15,7 @@ def test_get_meta_success():
     assert "temperaments" in payload
     assert "modules" in payload
     assert "difficulties" in payload
+    assert payload["temperaments"] == [{"id": "equal_temperament", "label": "Equal"}]
 
 
 def test_create_session_success():
@@ -57,6 +58,20 @@ def test_create_session_rejects_invalid_key():
             "gender": "female",
             "key": "H",
             "temperament": "equal_temperament",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_session_rejects_just_intonation():
+    response = client.post(
+        "/api/v1/session",
+        json={
+            "moduleId": "M2-L1",
+            "gender": "male",
+            "key": "C",
+            "temperament": "just_intonation",
         },
     )
 

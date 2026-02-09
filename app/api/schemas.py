@@ -13,7 +13,7 @@ class SessionCreateRequest(BaseModel):
     moduleId: str
     gender: Literal["male", "female"]
     key: str
-    temperament: Literal["equal_temperament", "just_intonation"]
+    temperament: Literal["equal_temperament"]
 
     @field_validator("key")
     @classmethod

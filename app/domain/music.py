@@ -8,11 +8,9 @@ MALE_DO_C = 130.8
 FEMALE_DO_C = 261.6
 
 EQUAL_TEMPERAMENT = "equal_temperament"
-JUST_INTONATION = "just_intonation"
 
 TEMPERAMENT_OPTIONS = [
-    {"id": EQUAL_TEMPERAMENT, "label": "12-Tone Equal Temperament"},
-    {"id": JUST_INTONATION, "label": "5-limit Just Intonation"},
+    {"id": EQUAL_TEMPERAMENT, "label": "Equal"},
 ]
 
 KEY_OPTIONS = [
@@ -38,23 +36,6 @@ GENDER_OPTIONS = [
 ]
 
 GENDER_BASE_DO = {"male": MALE_DO_C, "female": FEMALE_DO_C}
-
-# Semitone ratios relative to Do for 5-limit just intonation.
-JUST_INTONATION_RATIOS = [
-    1 / 1,
-    16 / 15,
-    9 / 8,
-    6 / 5,
-    5 / 4,
-    4 / 3,
-    45 / 32,
-    3 / 2,
-    8 / 5,
-    5 / 3,
-    9 / 5,
-    15 / 8,
-]
-
 
 @dataclass(frozen=True)
 class NoteDefinition:
@@ -182,11 +163,9 @@ def calculate_do_frequency(gender: str, key_id: str) -> float:
 def note_frequency(semitone: int, do_frequency: float, temperament: str) -> float:
     """Get note frequency for semitone offset from Do."""
 
-    if temperament == EQUAL_TEMPERAMENT:
-        return do_frequency * (2 ** (semitone / 12))
-    if temperament == JUST_INTONATION:
-        return do_frequency * JUST_INTONATION_RATIOS[semitone]
-    raise ValueError(f"Unknown temperament '{temperament}'")
+    if temperament != EQUAL_TEMPERAMENT:
+        raise ValueError(f"Unsupported temperament '{temperament}'")
+    return do_frequency * (2 ** (semitone / 12))
 
 
 def get_note_pool(level: str) -> list[NoteDefinition]:

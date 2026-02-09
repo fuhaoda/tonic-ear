@@ -7,16 +7,17 @@ import uuid
 from dataclasses import dataclass
 from itertools import combinations
 
+from app.domain.audio_samples import map_target_frequency
 from app.domain.music import (
     EQUAL_TEMPERAMENT,
     GENDER_OPTIONS,
-    JUST_INTONATION,
     KEY_OPTIONS,
     TEMPERAMENT_OPTIONS,
     build_note_payload,
     calculate_do_frequency,
     get_difficulty_metadata,
     get_note_pool,
+    note_frequency,
 )
 
 QUESTION_COUNT = 20
@@ -209,7 +210,7 @@ def _generate_question(
 def _generate_compare_two(module, question_number, notes_pool, do_frequency, temperament) -> dict:
     interval_step = _interval_constraint_for_level(module.level)
     picked = _pick_compare_notes(notes_pool, interval_step)
-    note_payloads = [build_note_payload(note, do_frequency, temperament) for note in picked]
+    note_payloads = _build_note_payloads(picked, do_frequency, temperament)
 
     correct_answer = "first_higher" if picked[0].semitone > picked[1].semitone else "second_higher"
 
@@ -230,7 +231,7 @@ def _generate_compare_two(module, question_number, notes_pool, do_frequency, tem
 def _generate_sort(module, question_number, notes_pool, do_frequency, temperament, note_count: int) -> dict:
     interval_step = _interval_constraint_for_level(module.level)
     picked = _pick_sort_notes(notes_pool, note_count, interval_step)
-    note_payloads = [build_note_payload(note, do_frequency, temperament) for note in picked]
+    note_payloads = _build_note_payloads(picked, do_frequency, temperament)
     sorted_indices = sorted(range(note_count), key=lambda idx: picked[idx].semitone)
 
     return {
@@ -249,7 +250,7 @@ def _generate_sort(module, question_number, notes_pool, do_frequency, temperamen
 
 def _generate_interval(module, question_number, notes_pool, do_frequency, temperament) -> dict:
     picked = random.sample(notes_pool, 2)
-    note_payloads = [build_note_payload(note, do_frequency, temperament) for note in picked]
+    note_payloads = _build_note_payloads(picked, do_frequency, temperament)
     distance = abs(picked[0].degree - picked[1].degree)
 
     possible_distances = sorted(
@@ -273,7 +274,7 @@ def _generate_interval(module, question_number, notes_pool, do_frequency, temper
 
 def _generate_single_note(module, question_number, notes_pool, do_frequency, temperament) -> dict:
     picked = random.choice(notes_pool)
-    note_payload = build_note_payload(picked, do_frequency, temperament)
+    note_payload = _build_note_payloads([picked], do_frequency, temperament)[0]
 
     correct_answer = {
         "degree": str(picked.degree),
@@ -371,5 +372,17 @@ def _pick_sort_notes(notes_pool: list, note_count: int, interval_step: int | Non
 
 
 def validate_temperament(temperament: str) -> None:
-    if temperament not in {EQUAL_TEMPERAMENT, JUST_INTONATION}:
+    if temperament != EQUAL_TEMPERAMENT:
         raise ValueError(f"Unknown temperament '{temperament}'")
+
+
+def _build_note_payloads(notes_pool: list, do_frequency: float, temperament: str) -> list[dict]:
+    payloads: list[dict] = []
+    for note in notes_pool:
+        payload = build_note_payload(note, do_frequency, temperament)
+        frequency = note_frequency(note.semitone, do_frequency, temperament)
+        mapping = map_target_frequency(frequency)
+        payload["sampleId"] = mapping.sample_id
+        payload["midi"] = mapping.midi
+        payloads.append(payload)
+    return payloads
