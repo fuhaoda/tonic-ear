@@ -294,6 +294,22 @@ select {
   background: #fcfeff;
 }
 
+.audio-debug-log {
+  margin: 0;
+  min-height: 120px;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.6rem 0.7rem;
+  background: #f7fafb;
+  color: #49616a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.86rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
 .quiz-top-row,
 .quiz-footer-row,
 .playback-controls,

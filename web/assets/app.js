@@ -1,10 +1,14 @@
 const API_BASE = "/api/v1";
 const PIANO_MANIFEST_PATH = "/assets/audio/piano/manifest.json";
+const AUDIO_DEBUG_ENABLED = new URLSearchParams(window.location.search).get("audio_debug") === "1";
 
 const NOTE_GAP_MS = 250;
 const SETTINGS_VERSION = 4;
 const MAX_CENTS_ERROR = 10;
 const MAX_POLYPHONY = 5;
+const SAMPLE_PRELOAD_CONCURRENCY = 4;
+const AUDIO_DEBUG_LOG_LIMIT = 40;
+const AUDIO_UNLOCK_TIMEOUT_MS = 500;
 
 const NATURAL_DEGREE_TO_SEMITONE = {
   1: 0,
@@ -38,9 +42,12 @@ const state = {
   sampleById: new Map(),
   sampleBufferCache: new Map(),
   sampleFetchPromises: new Map(),
-  sampleLoadPromise: null,
   keyboardTonePlan: null,
   activeVoices: [],
+  audioDebugLines: [],
+  audioUnlockFailures: 0,
+  lastAudioDebugMessage: "",
+  lastAudioSessionType: null,
 };
 
 const ui = {};
@@ -50,6 +57,7 @@ window.addEventListener("DOMContentLoaded", init);
 async function init() {
   cacheElements();
   bindStaticEvents();
+  setupAudioDebugPanel();
 
   try {
     await loadMeta();
@@ -102,6 +110,13 @@ function cacheElements() {
   ui.retryModuleBtn = document.getElementById("retryModuleBtn");
   ui.resetProgressBtn = document.getElementById("resetProgressBtn");
   ui.touchKeyboardButtons = document.getElementById("touchKeyboardButtons");
+
+  ui.audioDebugPanel = document.getElementById("audioDebugPanel");
+  ui.audioDebugStatus = document.getElementById("audioDebugStatus");
+  ui.audioDebugLog = document.getElementById("audioDebugLog");
+  ui.audioDebugUnlockBtn = document.getElementById("audioDebugUnlockBtn");
+  ui.audioDebugWebToneBtn = document.getElementById("audioDebugWebToneBtn");
+  ui.audioDebugSampleBtn = document.getElementById("audioDebugSampleBtn");
 }
 
 function bindStaticEvents() {
@@ -111,7 +126,7 @@ function bindStaticEvents() {
       return;
     }
     const moduleId = button.dataset.moduleId;
-    void startSession(moduleId);
+    void startSessionFromUserGesture(moduleId);
   });
 
   ui.genderSelect.addEventListener("change", onSettingsChange);
@@ -145,6 +160,11 @@ function bindStaticEvents() {
   armAudioUnlockListeners();
 
   ui.touchKeyboardButtons.addEventListener("pointerdown", handleTouchKeyboardPointerDown);
+  if (!window.PointerEvent) {
+    ui.touchKeyboardButtons.addEventListener("touchstart", handleTouchKeyboardPointerDown, {
+      passive: false,
+    });
+  }
 
   ui.nextBtn.addEventListener("click", () => {
     if (!state.currentAnswered) {
@@ -178,7 +198,7 @@ function bindStaticEvents() {
     if (!state.session) {
       return;
     }
-    void startSession(state.session.settings.moduleId);
+    void startSessionFromUserGesture(state.session.settings.moduleId);
   });
 
   ui.resetProgressBtn.addEventListener("click", () => {
@@ -191,6 +211,41 @@ function bindStaticEvents() {
     renderModuleGrid();
     renderHistory();
   });
+}
+
+function setupAudioDebugPanel() {
+  if (!ui.audioDebugPanel || !ui.audioDebugStatus || !ui.audioDebugLog) {
+    return;
+  }
+
+  if (!AUDIO_DEBUG_ENABLED) {
+    ui.audioDebugPanel.classList.add("hidden");
+    return;
+  }
+
+  ui.audioDebugPanel.classList.remove("hidden");
+  setAudioDebugStatus("Audio debug active. Use buttons below on iPhone.");
+  appendAudioDebugLog("Audio debug enabled");
+  appendAudioDebugLog(`UA: ${navigator.userAgent}`);
+  appendAudioDebugLog(`Secure context: ${window.isSecureContext ? "yes" : "no"}`);
+
+  if (ui.audioDebugUnlockBtn) {
+    ui.audioDebugUnlockBtn.addEventListener("click", () => {
+      void runAudioDebugUnlock();
+    });
+  }
+
+  if (ui.audioDebugWebToneBtn) {
+    ui.audioDebugWebToneBtn.addEventListener("click", () => {
+      void runAudioDebugWebTone();
+    });
+  }
+
+  if (ui.audioDebugSampleBtn) {
+    ui.audioDebugSampleBtn.addEventListener("click", () => {
+      void runAudioDebugSample();
+    });
+  }
 }
 
 async function loadMeta() {
@@ -277,6 +332,7 @@ function onSettingsChange() {
   state.settings.temperament = ui.temperamentSelect.value;
   state.keyboardTonePlan = null;
   persistSettings();
+  void preloadKeyboardSamplesIfPossible();
 }
 
 function setVisualHints(enabled) {
@@ -361,6 +417,15 @@ function renderHistory() {
   }
 }
 
+async function startSessionFromUserGesture(moduleId) {
+  try {
+    await unlockAudioPipeline();
+  } catch {
+    // Continue starting the session; playback paths will retry unlock.
+  }
+  await startSession(moduleId);
+}
+
 async function startSession(moduleId) {
   hideGlobalError();
 
@@ -394,10 +459,14 @@ async function startSession(moduleId) {
     state.answers = new Array(state.session.questions.length).fill(null);
     state.currentAnswered = false;
 
-    await unlockAudioPipeline();
-    void preloadAllSamples().catch(() => {
+    try {
+      const context = await ensureAudioContextRunning();
+      const warmupIds = collectSessionWarmupSampleIds(state.session);
+      await preloadSampleIds(context, warmupIds);
+      void preloadKeyboardSamplesIfPossible();
+    } catch {
       // Warmup failures are non-fatal; playback paths retry on demand.
-    });
+    }
     navigateToView("quizView");
     renderCurrentQuestion();
   } catch (error) {
@@ -896,6 +965,146 @@ function renderResult(correctCount, total, accuracy, wrongItems) {
   }
 }
 
+function appendAudioDebugLog(message) {
+  if (!AUDIO_DEBUG_ENABLED || !ui.audioDebugLog) {
+    return;
+  }
+  if (message === state.lastAudioDebugMessage) {
+    return;
+  }
+  state.lastAudioDebugMessage = message;
+  const now = new Date();
+  const timestamp = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(
+    now.getSeconds(),
+  ).padStart(2, "0")}`;
+  state.audioDebugLines.unshift(`[${timestamp}] ${message}`);
+  if (state.audioDebugLines.length > AUDIO_DEBUG_LOG_LIMIT) {
+    state.audioDebugLines = state.audioDebugLines.slice(0, AUDIO_DEBUG_LOG_LIMIT);
+  }
+  ui.audioDebugLog.textContent = state.audioDebugLines.join("\n");
+}
+
+function setAudioDebugStatus(message) {
+  if (!AUDIO_DEBUG_ENABLED || !ui.audioDebugStatus) {
+    return;
+  }
+  ui.audioDebugStatus.textContent = message;
+}
+
+async function runAudioDebugUnlock() {
+  try {
+    setAudioDebugStatus("Unlocking audio...");
+    await unlockAudioPipeline();
+    const context = getOrCreateAudioContext();
+    setAudioDebugStatus(
+      `Unlock ok | Context: ${context.state} | Primed: ${state.audioUnlocked ? "yes" : "no"} | Failures: ${state.audioUnlockFailures}`,
+    );
+    appendAudioDebugLog(`Unlock succeeded; context state is '${context.state}'`);
+  } catch (error) {
+    const message = error?.message || "Unlock failed";
+    setAudioDebugStatus(message);
+    appendAudioDebugLog(`Unlock failed: ${message}`);
+  }
+}
+
+async function runAudioDebugWebTone() {
+  try {
+    appendAudioDebugLog("WebAudio test tone requested (880Hz)");
+    const context = await ensureAudioContextRunning();
+    const gainNode = context.createGain();
+    gainNode.gain.value = 0.25;
+    gainNode.connect(context.destination);
+
+    const oscillator = context.createOscillator();
+    oscillator.type = "sine";
+    oscillator.frequency.value = 880;
+    oscillator.connect(gainNode);
+
+    const now = context.currentTime + 0.01;
+    oscillator.start(now);
+    oscillator.stop(now + 0.35);
+    appendAudioDebugLog("WebAudio test tone scheduled");
+  } catch (error) {
+    appendAudioDebugLog(`WebAudio test failed: ${error?.message || "unknown error"}`);
+    showGlobalError(error.message || "WebAudio test failed");
+  }
+}
+
+async function runAudioDebugSample() {
+  try {
+    appendAudioDebugLog("Sample test requested (m069)");
+    const context = await ensureAudioContextRunning();
+    await ensureSampleBuffer(context, "m069");
+    scheduleRawSample(context, "m069", context.currentTime + 0.01);
+    appendAudioDebugLog("Sample m069 playback scheduled");
+  } catch (error) {
+    appendAudioDebugLog(`Sample test failed: ${error?.message || "unknown error"}`);
+    showGlobalError(error.message || "Sample playback test failed");
+  }
+}
+
+function configureAudioSessionIfSupported() {
+  try {
+    const audioSession = navigator.audioSession;
+    if (!audioSession) {
+      return;
+    }
+    if (audioSession.type !== "playback") {
+      audioSession.type = "playback";
+    }
+    if (state.lastAudioSessionType !== audioSession.type) {
+      state.lastAudioSessionType = audioSession.type;
+      appendAudioDebugLog(`navigator.audioSession.type='${audioSession.type}'`);
+    }
+  } catch (error) {
+    appendAudioDebugLog(`navigator.audioSession failed: ${error?.message || "unknown error"}`);
+  }
+}
+
+async function resumeAudioContextWithTimeout(context, label = "primary") {
+  if (context.state === "running") {
+    return;
+  }
+
+  const resumeResult = context.resume();
+  if (resumeResult && typeof resumeResult.then === "function") {
+    await Promise.race([
+      resumeResult,
+      new Promise((_, reject) => {
+        window.setTimeout(() => {
+          reject(new Error(`AudioContext resume timed out (${label})`));
+        }, AUDIO_UNLOCK_TIMEOUT_MS);
+      }),
+    ]);
+    return;
+  }
+
+  // Legacy path: give Safari a short window to transition state.
+  await new Promise((resolve) => window.setTimeout(resolve, 40));
+  if (context.state !== "running") {
+    throw new Error(`AudioContext resume did not enter running state (${label})`);
+  }
+}
+
+async function recreateAudioContext() {
+  const previous = state.audioCtx;
+  state.audioCtx = null;
+  state.audioUnlocked = false;
+
+  if (previous && previous.state !== "closed") {
+    try {
+      await previous.close();
+      appendAudioDebugLog("Previous AudioContext closed");
+    } catch (error) {
+      appendAudioDebugLog(`AudioContext close failed: ${error?.message || "unknown error"}`);
+    }
+  }
+
+  const fresh = getOrCreateAudioContext();
+  appendAudioDebugLog("Created fresh AudioContext");
+  return fresh;
+}
+
 function getOrCreateAudioContext() {
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) {
@@ -909,11 +1118,19 @@ function getOrCreateAudioContext() {
 }
 
 async function ensureAudioContextRunning() {
-  const context = getOrCreateAudioContext();
+  let context = getOrCreateAudioContext();
   if (context.state === "running") {
     return context;
   }
+  configureAudioSessionIfSupported();
   await unlockAudioPipeline();
+  // unlockAudioPipeline may recreate AudioContext on iOS; always re-read the latest instance.
+  context = state.audioCtx || context;
+  if (context.state !== "running") {
+    appendAudioDebugLog(`Context state after unlock is '${context.state}', retrying unlock once`);
+    await unlockAudioPipeline();
+    context = state.audioCtx || context;
+  }
   if (context.state !== "running") {
     throw new Error("Audio context is not running");
   }
@@ -928,6 +1145,7 @@ function warmAudioPipelineOnce() {
   void unlockAudioPipeline()
     .then(() => {
       if (state.audioUnlocked) {
+        void preloadKeyboardSamplesIfPossible();
         removeAudioUnlockListeners();
       }
     })
@@ -938,62 +1156,126 @@ function warmAudioPipelineOnce() {
 
 function armAudioUnlockListeners() {
   const options = { capture: true };
-  window.addEventListener("pointerdown", warmAudioPipelineOnce, options);
-  window.addEventListener("touchstart", warmAudioPipelineOnce, options);
+  window.addEventListener("pointerup", warmAudioPipelineOnce, options);
+  window.addEventListener("touchend", warmAudioPipelineOnce, options);
   window.addEventListener("click", warmAudioPipelineOnce, options);
   window.addEventListener("keydown", warmAudioPipelineOnce, options);
 }
 
 function removeAudioUnlockListeners() {
   const options = { capture: true };
-  window.removeEventListener("pointerdown", warmAudioPipelineOnce, options);
-  window.removeEventListener("touchstart", warmAudioPipelineOnce, options);
+  window.removeEventListener("pointerup", warmAudioPipelineOnce, options);
+  window.removeEventListener("touchend", warmAudioPipelineOnce, options);
   window.removeEventListener("click", warmAudioPipelineOnce, options);
   window.removeEventListener("keydown", warmAudioPipelineOnce, options);
 }
 
 async function unlockAudioPipeline() {
-  const context = getOrCreateAudioContext();
+  let context = getOrCreateAudioContext();
+  configureAudioSessionIfSupported();
   if (context.state === "running") {
     state.audioUnlocked = true;
+    appendAudioDebugLog("AudioContext already running");
     return;
   }
 
   if (!state.audioUnlockPromise) {
-    state.audioUnlockPromise = context
-      .resume()
-      .then(() => {
-        primeAudioContextTick(context);
-        state.audioUnlocked = true;
-      })
-      .finally(() => {
-        state.audioUnlockPromise = null;
-      });
+    state.audioUnlockPromise = (async () => {
+      try {
+        await resumeAudioContextWithTimeout(context, "primary");
+      } catch (primaryError) {
+        state.audioUnlockFailures += 1;
+        appendAudioDebugLog(`Primary resume failed: ${primaryError?.message || "unknown error"}`);
+        context = await recreateAudioContext();
+        configureAudioSessionIfSupported();
+        await resumeAudioContextWithTimeout(context, "recreated");
+      }
+
+      configureAudioSessionIfSupported();
+      primeAudioContextTick(context);
+      state.audioUnlocked = true;
+      appendAudioDebugLog(`AudioContext resumed: ${context.state}`);
+    })().finally(() => {
+      state.audioUnlockPromise = null;
+    });
   }
 
   await state.audioUnlockPromise;
 }
 
-async function preloadAllSamples() {
-  if (state.sampleLoadPromise) {
-    return state.sampleLoadPromise;
+async function preloadSampleIds(context, sampleIds) {
+  const queue = Array.from(new Set(sampleIds)).filter((sampleId) => state.sampleById.has(sampleId));
+  if (!queue.length) {
+    return;
   }
 
-  if (!state.audioManifest) {
-    throw new Error("Piano manifest is not loaded");
+  const workers = Array.from({ length: Math.min(SAMPLE_PRELOAD_CONCURRENCY, queue.length) }, async () => {
+    while (queue.length) {
+      const sampleId = queue.shift();
+      if (!sampleId) {
+        break;
+      }
+      await ensureSampleBuffer(context, sampleId);
+    }
+  });
+
+  await Promise.all(workers);
+}
+
+function collectSessionWarmupSampleIds(session) {
+  if (!session || !Array.isArray(session.questions) || !session.questions.length) {
+    return getKeyboardSampleIds();
   }
 
-  state.sampleLoadPromise = (async () => {
-    const context = getOrCreateAudioContext();
-    await Promise.all(state.audioManifest.samples.map((sample) => ensureSampleBuffer(context, sample.id)));
-  })();
+  const firstQuestion = session.questions[0];
+  const firstQuestionIds = collectSampleIdsForNotes(firstQuestion?.notes || []);
+  return Array.from(new Set([...firstQuestionIds, ...getKeyboardSampleIds()]));
+}
 
-  try {
-    await state.sampleLoadPromise;
-  } catch (error) {
-    state.sampleLoadPromise = null;
-    throw error;
+function collectSampleIdsForNotes(notes) {
+  if (!Array.isArray(notes) || !notes.length) {
+    return [];
   }
+
+  const ids = [];
+  for (const note of notes) {
+    try {
+      ids.push(resolveSampleIdForNote(note));
+    } catch {
+      // Ignore invalid note payload during warmup; playback will surface actionable errors.
+    }
+  }
+  return ids;
+}
+
+function getKeyboardSampleIds() {
+  const tonePlan = ensureKeyboardTonePlan();
+  if (!tonePlan) {
+    return [];
+  }
+
+  const ids = [];
+  for (let degree = 1; degree <= 7; degree += 1) {
+    const toneSpec = tonePlan.degreeMap.get(degree);
+    if (!toneSpec) {
+      continue;
+    }
+    const targetFrequency = clampFrequencyToSampleRange(toneSpec.frequency);
+    const mapping = mapTargetHzToSample(targetFrequency);
+    ids.push(mapping.sampleId);
+  }
+  return Array.from(new Set(ids));
+}
+
+function preloadKeyboardSamplesIfPossible() {
+  if (!state.audioUnlocked || !state.audioCtx || state.audioCtx.state !== "running") {
+    return Promise.resolve();
+  }
+  const sampleIds = getKeyboardSampleIds();
+  if (!sampleIds.length) {
+    return Promise.resolve();
+  }
+  return preloadSampleIds(state.audioCtx, sampleIds);
 }
 
 async function ensureSampleBuffer(context, sampleId) {
@@ -1025,6 +1307,7 @@ async function ensureSampleBuffer(context, sampleId) {
   })()
     .catch((error) => {
       state.sampleBufferCache.delete(sampleId);
+      appendAudioDebugLog(`Sample ${sampleId} failed: ${error?.message || "unknown error"}`);
       throw error;
     })
     .finally(() => {
@@ -1167,20 +1450,35 @@ function scheduleRawSample(context, sampleId, startAt) {
     throw new Error(`Decoded sample '${sampleId}' is unavailable`);
   }
 
+  state.activeVoices = state.activeVoices.filter((voice) => voice && voice.__alive !== false);
   if (state.activeVoices.length >= MAX_POLYPHONY) {
+    appendAudioDebugLog(`Voice limit reached (${MAX_POLYPHONY}), dropping ${sampleId}`);
     return;
   }
 
   const source = context.createBufferSource();
   source.buffer = buffer;
   source.connect(context.destination);
+  source.__alive = true;
 
-  source.onended = () => {
+  const cleanup = () => {
+    source.__alive = false;
     state.activeVoices = state.activeVoices.filter((voice) => voice !== source);
   };
+  source.onended = cleanup;
+
+  const maxLifetimeMs = Math.ceil((buffer.duration + 0.3) * 1000);
+  window.setTimeout(cleanup, maxLifetimeMs);
+
+  try {
+    source.start(startAt);
+  } catch (error) {
+    cleanup();
+    source.disconnect();
+    throw error;
+  }
 
   state.activeVoices.push(source);
-  source.start(startAt);
 }
 
 function handleGlobalToneKeydown(event) {
@@ -1450,6 +1748,7 @@ function writeStorage(key, value) {
 }
 
 function showGlobalError(message) {
+  appendAudioDebugLog(`Global error: ${message}`);
   ui.globalError.textContent = message;
   ui.globalError.classList.remove("hidden");
 }

@@ -47,6 +47,20 @@
           <button id="resetProgressBtn" class="btn btn-ghost" type="button">Reset local progress</button>
         </div>
 
+        <div id="audioDebugPanel" class="panel hidden">
+          <div class="panel-title-row">
+            <h2>Audio Debug</h2>
+            <span class="chip">iPhone diagnostics</span>
+          </div>
+          <p id="audioDebugStatus" class="subtle">Audio debug disabled.</p>
+          <div class="button-row">
+            <button id="audioDebugUnlockBtn" class="btn" type="button">Unlock Audio</button>
+            <button id="audioDebugWebToneBtn" class="btn" type="button">Test WebAudio 880Hz</button>
+            <button id="audioDebugSampleBtn" class="btn" type="button">Test Sample m069</button>
+          </div>
+          <pre id="audioDebugLog" class="audio-debug-log" aria-live="polite"></pre>
+        </div>
+
         <div class="panel">
           <div class="panel-title-row">
             <h2>Module List</h2>
