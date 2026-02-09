@@ -7,7 +7,7 @@ import argparse
 from array import array
 from dataclasses import dataclass
 import json
-from math import log2, sqrt
+from math import exp, log, log2, log10, sqrt
 from pathlib import Path
 import re
 import shutil
@@ -71,14 +71,29 @@ ONSET_RMS_WINDOW_SEC = 0.10
 MIDI_TOLERANCE_SEMITONES = 0.75
 START_PREROLL_SEC = 0.004
 
-TARGET_PEAK_LINEAR = 0.90
-GAIN_CLAMP_MIN = 0.10
-GAIN_CLAMP_MAX = 5.00
-LOW_RMS_FLOOR_RATIO = 0.25
-LOW_RMS_DONOR_RATIO = 0.70
-TONAL_HIGHPASS_HZ = 80.0
-TONAL_RATIO_FLOOR = 0.25
-TONAL_DONOR_RATIO = 0.70
+TARGET_PEAK_LINEAR = 0.92
+GAIN_CLAMP_MIN = 0.35
+GAIN_CLAMP_MAX = 2.80
+ATTACK_ANALYSIS_SEC = 0.35
+MID_WINDOW_START_SEC = 0.35
+MID_WINDOW_DURATION_SEC = 0.55
+TAIL_ANALYSIS_SEC = 0.60
+SUSTAIN_RATIO_FLOOR = 0.24
+SUSTAIN_DONOR_RATIO = 0.30
+SUSTAIN_REPAIR_MAX_SEMITONES = 8
+SUSTAIN_REPAIR_MAX_PASSES = 4
+GAIN_SMOOTHING_LAMBDA = 0.08
+GAIN_SMOOTHING_PASSES = 1
+
+MAX_ADJACENT_GAIN_STEP_DB = 3.5
+MAX_ATTACK_RMS_SPREAD_DB = 3.2
+MAX_FULL_RMS_SPREAD_DB = 2.0
+MAX_MID_RMS_SPREAD_DB = 7.0
+MAX_SUSTAIN_SPREAD_DB = 10.0
+QUALITY_SPREAD_LOW_PERCENTILE = 0.10
+QUALITY_SPREAD_HIGH_PERCENTILE = 0.90
+SUSTAIN_SPREAD_LOW_PERCENTILE = 0.15
+SUSTAIN_SPREAD_HIGH_PERCENTILE = 0.85
 
 NOTE_SEMITONES = {
     "C": 0,
@@ -99,6 +114,7 @@ NOTE_SEMITONES = {
 @dataclass(frozen=True)
 class OnsetCandidate:
     midi: int
+    source_filename: str
     onset_sec: float
     estimated_midi: float
     rms: float
@@ -286,6 +302,7 @@ def window_rms(samples: array, sample_rate: int, start_sec: float, duration_sec:
 
 def detect_candidates_for_file(
     source_path: Path,
+    source_filename: str,
     expected_midis: list[int],
     sample_rate: int,
 ) -> dict[int, OnsetCandidate]:
@@ -317,6 +334,7 @@ def detect_candidates_for_file(
         candidates.append(
             OnsetCandidate(
                 midi=nearest_midi,
+                source_filename=source_filename,
                 onset_sec=onset,
                 estimated_midi=estimated,
                 rms=rms,
@@ -332,14 +350,99 @@ def detect_candidates_for_file(
     return best_by_midi
 
 
+def source_group_from_filename(filename: str) -> str:
+    parts = filename.split(".")
+    if len(parts) >= 3:
+        return parts[2]
+    return filename
+
+
+def _candidate_base_cost(candidate: OnsetCandidate) -> float:
+    pitch_cost = abs(candidate.estimated_midi - candidate.midi) * 16.0
+    loud_pref = -2.5 * log(max(candidate.rms, 1e-9))
+    return pitch_cost + loud_pref
+
+
+def _candidate_transition_cost(previous: OnsetCandidate, current: OnsetCandidate) -> float:
+    pitch_step_cost = abs((current.estimated_midi - previous.estimated_midi) - 1.0) * 8.0
+    rms_jump = abs(log((current.rms + 1e-9) / (previous.rms + 1e-9))) * 6.0
+    source_switch = (
+        0.0 if source_group_from_filename(previous.source_filename) == source_group_from_filename(current.source_filename) else 0.45
+    )
+    return pitch_step_cost + rms_jump + source_switch
+
+
+def select_smooth_native_candidates(
+    candidates_by_midi: dict[int, list[OnsetCandidate]],
+    required_midis: list[int],
+) -> dict[int, OnsetCandidate]:
+    layered: list[tuple[int, list[OnsetCandidate]]] = []
+    for midi in required_midis:
+        options = sorted(
+            candidates_by_midi.get(midi, []),
+            key=lambda candidate: abs(candidate.estimated_midi - midi),
+        )
+        if not options:
+            raise SystemExit(f"No candidate found for MIDI {midi}")
+        # Keep search breadth bounded to avoid combinatorial blowup.
+        layered.append((midi, options[:8]))
+
+    dp: list[list[float]] = []
+    backtrack: list[list[int]] = []
+
+    first_midi, first_options = layered[0]
+    dp.append([_candidate_base_cost(candidate) for candidate in first_options])
+    backtrack.append([-1] * len(first_options))
+
+    _ = first_midi  # silence unused warning when linting with stricter configs
+    for layer_index in range(1, len(layered)):
+        _, options = layered[layer_index]
+        _, prev_options = layered[layer_index - 1]
+        prev_scores = dp[layer_index - 1]
+
+        scores: list[float] = []
+        pointers: list[int] = []
+        for candidate in options:
+            base = _candidate_base_cost(candidate)
+            best_score = float("inf")
+            best_pointer = -1
+            for prev_index, prev_candidate in enumerate(prev_options):
+                transition = _candidate_transition_cost(prev_candidate, candidate)
+                score = prev_scores[prev_index] + base + transition
+                if score < best_score:
+                    best_score = score
+                    best_pointer = prev_index
+            scores.append(best_score)
+            pointers.append(best_pointer)
+
+        dp.append(scores)
+        backtrack.append(pointers)
+
+    final_layer_scores = dp[-1]
+    best_last_index = min(range(len(final_layer_scores)), key=lambda index: final_layer_scores[index])
+
+    selected: dict[int, OnsetCandidate] = {}
+    pointer = best_last_index
+    for layer_index in range(len(layered) - 1, -1, -1):
+        midi, options = layered[layer_index]
+        selected[midi] = options[pointer]
+        pointer = backtrack[layer_index][pointer]
+        if pointer < 0 and layer_index > 0:
+            raise SystemExit("Internal error while reconstructing native candidate path")
+
+    return selected
+
+
 def collect_native_selections(cache_dir: Path, sample_rate: int) -> dict[int, NativeSelection]:
-    global_best: dict[int, NativeSelection] = {}
+    required = list(range(NATIVE_MIN_MIDI, NATIVE_MAX_MIDI + 1))
+    candidates_by_midi: dict[int, list[OnsetCandidate]] = {midi: [] for midi in required}
 
     for filename in RANGE_FILENAMES:
         expected_midis = parse_filename_expected_midis(filename)
         source_path = cache_dir / filename
         file_best = detect_candidates_for_file(
             source_path=source_path,
+            source_filename=filename,
             expected_midis=expected_midis,
             sample_rate=sample_rate,
         )
@@ -349,26 +452,30 @@ def collect_native_selections(cache_dir: Path, sample_rate: int) -> dict[int, Na
             print(f"WARNING: {filename} missing candidate MIDI values: {missing}")
 
         for midi, candidate in file_best.items():
-            selection = NativeSelection(
-                midi=midi,
-                source_filename=filename,
-                onset_sec=candidate.onset_sec,
-                estimated_midi=candidate.estimated_midi,
-                rms=candidate.rms,
-            )
-            previous = global_best.get(midi)
-            if previous is None or selection.rms > previous.rms:
-                global_best[midi] = selection
+            candidates_by_midi[midi].append(candidate)
 
-    required = list(range(NATIVE_MIN_MIDI, NATIVE_MAX_MIDI + 1))
-    missing_global = [midi for midi in required if midi not in global_best]
+    missing_global = [midi for midi in required if not candidates_by_midi.get(midi)]
     if missing_global:
         raise SystemExit(
             "Failed to detect full native guitar MIDI range "
             f"{NATIVE_MIN_MIDI}-{NATIVE_MAX_MIDI}; missing {missing_global}",
         )
 
-    return global_best
+    chosen_candidates = select_smooth_native_candidates(
+        candidates_by_midi=candidates_by_midi,
+        required_midis=required,
+    )
+
+    return {
+        midi: NativeSelection(
+            midi=midi,
+            source_filename=candidate.source_filename,
+            onset_sec=candidate.onset_sec,
+            estimated_midi=candidate.estimated_midi,
+            rms=candidate.rms,
+        )
+        for midi, candidate in chosen_candidates.items()
+    }
 
 
 def render_fixed_duration_wav(
@@ -517,179 +624,239 @@ def measure_peak_and_window_rms(
     return peak, rms
 
 
-def measure_highpass_rms(input_path: Path, sample_rate: int, cutoff_hz: float) -> float:
-    ffmpeg_cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        str(input_path),
-        "-vn",
-        "-af",
-        f"highpass=f={cutoff_hz:.3f}",
-        "-ac",
-        "1",
-        "-ar",
-        str(sample_rate),
-        "-f",
-        "f32le",
-        "-",
-    ]
-    proc = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-    samples = array("f")
-    samples.frombytes(proc.stdout)
+def measure_window_rms_segment(
+    input_path: Path,
+    sample_rate: int,
+    start_sec: float,
+    duration_sec: float,
+) -> float:
+    samples = decode_mono_float_samples(input_path, sample_rate=sample_rate)
     if not samples:
         return 0.0
-    energy = 0.0
-    for value in samples:
-        energy += value * value
-    return sqrt(energy / len(samples))
+    return window_rms(samples, sample_rate=sample_rate, start_sec=start_sec, duration_sec=duration_sec)
 
 
-def repair_low_energy_temp_wavs(
+def collect_temp_rms_maps(
     temp_paths: dict[int, Path],
     sample_rate: int,
     duration: float,
-) -> tuple[dict[str, float], dict[str, float], float]:
-    """Repair near-silent extracted notes by regenerating from nearby robust donors."""
-
+) -> tuple[dict[str, float], dict[str, float], dict[str, float], dict[str, float], dict[str, float]]:
     peak_map: dict[str, float] = {}
-    rms_map: dict[str, float] = {}
+    full_rms_map: dict[str, float] = {}
+    attack_rms_map: dict[str, float] = {}
+    mid_rms_map: dict[str, float] = {}
+    tail_rms_map: dict[str, float] = {}
+
+    attack_window_duration = min(ATTACK_ANALYSIS_SEC, duration)
+    mid_window_start = min(max(0.0, MID_WINDOW_START_SEC), max(0.0, duration - 0.05))
+    mid_window_duration = min(max(0.05, MID_WINDOW_DURATION_SEC), max(0.05, duration - mid_window_start))
+    tail_window_start = max(0.0, duration - TAIL_ANALYSIS_SEC)
+    tail_window_duration = max(0.05, duration - tail_window_start)
     for spec in build_sample_specs("guitar"):
-        peak, rms = measure_peak_and_window_rms(
+        peak, full_rms = measure_peak_and_window_rms(
             temp_paths[spec.midi],
             sample_rate=sample_rate,
             analysis_duration_sec=duration,
         )
         peak_map[spec.id] = peak
-        rms_map[spec.id] = rms
-
-    nonzero_rms = [value for value in rms_map.values() if value > 0]
-    if not nonzero_rms:
-        raise SystemExit("All extracted guitar samples are silent")
-
-    rms_target = median(nonzero_rms)
-    low_floor = rms_target * LOW_RMS_FLOOR_RATIO
-    donor_floor = rms_target * LOW_RMS_DONOR_RATIO
-
-    def donor_midis() -> list[int]:
-        mids: list[int] = []
-        for spec in build_sample_specs("guitar"):
-            if rms_map.get(spec.id, 0.0) >= donor_floor:
-                mids.append(spec.midi)
-        return mids
-
-    donors = donor_midis()
-    if not donors:
-        raise SystemExit("No robust donor notes found for low-energy guitar repair")
-
-    repaired_any = False
-    for spec in build_sample_specs("guitar"):
-        rms_value = rms_map.get(spec.id, 0.0)
-        if rms_value >= low_floor:
-            continue
-
-        donor_midi = min(donors, key=lambda midi: abs(midi - spec.midi))
-        if donor_midi == spec.midi:
-            continue
-
-        repaired_any = True
-        pitch_shift_wav_to_midi(
-            input_path=temp_paths[donor_midi],
-            output_path=temp_paths[spec.midi],
-            source_midi=donor_midi,
-            target_midi=spec.midi,
-            duration=duration,
-            sample_rate=sample_rate,
-        )
-        peak, rms = measure_peak_and_window_rms(
+        full_rms_map[spec.id] = full_rms
+        attack_rms_map[spec.id] = measure_window_rms_segment(
             temp_paths[spec.midi],
             sample_rate=sample_rate,
-            analysis_duration_sec=duration,
+            start_sec=0.0,
+            duration_sec=attack_window_duration,
         )
-        peak_map[spec.id] = peak
-        rms_map[spec.id] = rms
-        donors = donor_midis()
+        mid_rms_map[spec.id] = measure_window_rms_segment(
+            temp_paths[spec.midi],
+            sample_rate=sample_rate,
+            start_sec=mid_window_start,
+            duration_sec=mid_window_duration,
+        )
+        tail_rms_map[spec.id] = measure_window_rms_segment(
+            temp_paths[spec.midi],
+            sample_rate=sample_rate,
+            start_sec=tail_window_start,
+            duration_sec=tail_window_duration,
+        )
 
-    if repaired_any:
-        nonzero_rms = [value for value in rms_map.values() if value > 0]
-        rms_target = median(nonzero_rms)
-
-    return peak_map, rms_map, rms_target
+    return peak_map, full_rms_map, attack_rms_map, mid_rms_map, tail_rms_map
 
 
-def repair_low_tonal_ratio_temp_wavs(
+def repair_low_sustain_temp_wavs(
     temp_paths: dict[int, Path],
-    peak_map: dict[str, float],
-    rms_map: dict[str, float],
     sample_rate: int,
     duration: float,
-) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-    """Repair muddy/near-DC notes by deriving from nearby tonally strong notes."""
+) -> tuple[
+    dict[str, float],
+    dict[str, float],
+    dict[str, float],
+    dict[str, float],
+    dict[str, float],
+    dict[str, float],
+]:
+    peak_map: dict[str, float] = {}
+    full_rms_map: dict[str, float] = {}
+    attack_rms_map: dict[str, float] = {}
+    mid_rms_map: dict[str, float] = {}
+    tail_rms_map: dict[str, float] = {}
 
-    ratio_map: dict[str, float] = {}
-    for spec in build_sample_specs("guitar"):
-        hrms = measure_highpass_rms(temp_paths[spec.midi], sample_rate=sample_rate, cutoff_hz=TONAL_HIGHPASS_HZ)
-        rms = max(rms_map.get(spec.id, 0.0), 1e-12)
-        ratio_map[spec.id] = hrms / rms
+    def sustain_ratio(sample_id: str) -> float:
+        attack = max(attack_rms_map.get(sample_id, 0.0), 1e-12)
+        tail = max(tail_rms_map.get(sample_id, 0.0), 0.0)
+        return tail / attack
 
-    def donor_midis() -> list[int]:
-        mids: list[int] = []
-        for spec in build_sample_specs("guitar"):
-            if ratio_map.get(spec.id, 0.0) >= TONAL_DONOR_RATIO:
-                mids.append(spec.midi)
-        return mids
-
-    donors = donor_midis()
-    if not donors:
-        return peak_map, rms_map, ratio_map
-
-    repaired_any = False
-    for spec in build_sample_specs("guitar"):
-        ratio = ratio_map.get(spec.id, 0.0)
-        if ratio >= TONAL_RATIO_FLOOR:
-            continue
-
-        donor_midi = min(donors, key=lambda midi: abs(midi - spec.midi))
-        if donor_midi == spec.midi:
-            continue
-
-        repaired_any = True
-        pitch_shift_wav_to_midi(
-            input_path=temp_paths[donor_midi],
-            output_path=temp_paths[spec.midi],
-            source_midi=donor_midi,
-            target_midi=spec.midi,
+    for _ in range(SUSTAIN_REPAIR_MAX_PASSES):
+        peak_map, full_rms_map, attack_rms_map, mid_rms_map, tail_rms_map = collect_temp_rms_maps(
+            temp_paths=temp_paths,
+            sample_rate=sample_rate,
             duration=duration,
-            sample_rate=sample_rate,
         )
-        peak, rms = measure_peak_and_window_rms(
-            temp_paths[spec.midi],
-            sample_rate=sample_rate,
-            analysis_duration_sec=duration,
-        )
-        peak_map[spec.id] = peak
-        rms_map[spec.id] = rms
-        hrms = measure_highpass_rms(temp_paths[spec.midi], sample_rate=sample_rate, cutoff_hz=TONAL_HIGHPASS_HZ)
-        ratio_map[spec.id] = hrms / max(rms, 1e-12)
-        donors = donor_midis()
-        if not donors:
+        repaired_any = False
+        for spec in build_sample_specs("guitar"):
+            sid = spec.id
+            ratio = sustain_ratio(sid)
+            if ratio >= SUSTAIN_RATIO_FLOOR:
+                continue
+
+            donor_candidates = []
+            for donor in build_sample_specs("guitar"):
+                if donor.midi == spec.midi:
+                    continue
+                donor_ratio = sustain_ratio(donor.id)
+                semitone_distance = abs(donor.midi - spec.midi)
+                if donor_ratio < max(SUSTAIN_DONOR_RATIO, ratio * 1.35):
+                    continue
+                if semitone_distance > SUSTAIN_REPAIR_MAX_SEMITONES:
+                    continue
+                attack_similarity = abs(log(max(attack_rms_map.get(donor.id, 1e-12), 1e-12) / max(attack_rms_map.get(sid, 1e-12), 1e-12)))
+                donor_candidates.append((semitone_distance, attack_similarity, -donor_ratio, donor))
+
+            if not donor_candidates:
+                for donor in build_sample_specs("guitar"):
+                    if donor.midi == spec.midi:
+                        continue
+                    donor_ratio = sustain_ratio(donor.id)
+                    semitone_distance = abs(donor.midi - spec.midi)
+                    if donor_ratio <= ratio * 1.20:
+                        continue
+                    if semitone_distance > SUSTAIN_REPAIR_MAX_SEMITONES:
+                        continue
+                    attack_similarity = abs(
+                        log(
+                            max(attack_rms_map.get(donor.id, 1e-12), 1e-12)
+                            / max(attack_rms_map.get(sid, 1e-12), 1e-12),
+                        ),
+                    )
+                    donor_candidates.append((semitone_distance, attack_similarity, -donor_ratio, donor))
+
+            if not donor_candidates:
+                continue
+
+            donor_candidates.sort()
+            donor = donor_candidates[0][3]
+            repaired_any = True
+            pitch_shift_wav_to_midi(
+                input_path=temp_paths[donor.midi],
+                output_path=temp_paths[spec.midi],
+                source_midi=donor.midi,
+                target_midi=spec.midi,
+                duration=duration,
+                sample_rate=sample_rate,
+            )
+
+        if not repaired_any:
             break
 
-    if repaired_any:
-        for spec in build_sample_specs("guitar"):
-            hrms = measure_highpass_rms(temp_paths[spec.midi], sample_rate=sample_rate, cutoff_hz=TONAL_HIGHPASS_HZ)
-            ratio_map[spec.id] = hrms / max(rms_map.get(spec.id, 0.0), 1e-12)
+    sustain_ratio_map = {
+        spec.id: max(tail_rms_map.get(spec.id, 0.0), 0.0) / max(attack_rms_map.get(spec.id, 1e-12), 1e-12)
+        for spec in build_sample_specs("guitar")
+    }
+    return peak_map, full_rms_map, attack_rms_map, mid_rms_map, tail_rms_map, sustain_ratio_map
 
-    return peak_map, rms_map, ratio_map
+
+def _spread_db(values: list[float]) -> float:
+    nonzero = [value for value in values if value > 0]
+    if len(nonzero) < 2:
+        return 0.0
+    return 20.0 * log10(max(nonzero) / min(nonzero))
 
 
-def compute_gain_map_from_full_rms(
+def _percentile(values: list[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    if percentile <= 0:
+        return sorted_values[0]
+    if percentile >= 1:
+        return sorted_values[-1]
+    position = percentile * (len(sorted_values) - 1)
+    lower_index = int(position)
+    upper_index = min(len(sorted_values) - 1, lower_index + 1)
+    fraction = position - lower_index
+    return sorted_values[lower_index] * (1.0 - fraction) + sorted_values[upper_index] * fraction
+
+
+def _spread_db_percentile(values: list[float], low_percentile: float, high_percentile: float) -> float:
+    nonzero = [value for value in values if value > 0]
+    if len(nonzero) < 2:
+        return 0.0
+    lo = _percentile(nonzero, low_percentile)
+    hi = _percentile(nonzero, high_percentile)
+    if lo <= 0 or hi <= 0:
+        return 0.0
+    return 20.0 * log10(hi / lo)
+
+
+def smooth_gain_map_by_neighbors(gain_map: dict[str, float]) -> dict[str, float]:
+    ordered_specs = sorted(build_sample_specs("guitar"), key=lambda spec: spec.midi)
+    log_gain = {spec.id: log(max(gain_map.get(spec.id, 1.0), 1e-12)) for spec in ordered_specs}
+
+    for _ in range(GAIN_SMOOTHING_PASSES):
+        next_log_gain: dict[str, float] = {}
+        for index, spec in enumerate(ordered_specs):
+            neighbors = []
+            if index > 0:
+                neighbors.append(log_gain[ordered_specs[index - 1].id])
+            if index + 1 < len(ordered_specs):
+                neighbors.append(log_gain[ordered_specs[index + 1].id])
+            if not neighbors:
+                next_log_gain[spec.id] = log_gain[spec.id]
+                continue
+            neighbor_avg = sum(neighbors) / len(neighbors)
+            next_log_gain[spec.id] = (
+                (1.0 - GAIN_SMOOTHING_LAMBDA) * log_gain[spec.id]
+                + GAIN_SMOOTHING_LAMBDA * neighbor_avg
+            )
+        log_gain = next_log_gain
+
+    smoothed: dict[str, float] = {}
+    for sample_id, value in log_gain.items():
+        gain = exp(value)
+        smoothed[sample_id] = max(GAIN_CLAMP_MIN, min(GAIN_CLAMP_MAX, gain))
+    return smoothed
+
+
+def compute_gain_map_from_blended_rms(
     peak_map: dict[str, float],
-    rms_map: dict[str, float],
+    full_rms_map: dict[str, float],
+    attack_rms_map: dict[str, float],
+    mid_rms_map: dict[str, float],
+    tail_rms_map: dict[str, float],
 ) -> tuple[dict[str, float], float, float]:
-    nonzero = [value for value in rms_map.values() if value > 0]
+    blended_map: dict[str, float] = {}
+    for spec in build_sample_specs("guitar"):
+        full_rms = full_rms_map.get(spec.id, 0.0)
+        attack_rms = attack_rms_map.get(spec.id, 0.0)
+        mid_rms = mid_rms_map.get(spec.id, 0.0)
+        # Prioritize whole-window loudness so 1.5s perceived level stays consistent,
+        # with a light attack/mid influence to avoid flattening articulation.
+        blended_map[spec.id] = (
+            max(full_rms, 1e-12) ** 0.85
+            * max(attack_rms, 1e-12) ** 0.10
+            * max(mid_rms, 1e-12) ** 0.05
+        )
+
+    nonzero = [value for value in blended_map.values() if value > 0]
     if not nonzero:
         raise SystemExit("Cannot normalize guitar samples: all RMS values are zero")
 
@@ -697,14 +864,32 @@ def compute_gain_map_from_full_rms(
     gain_map: dict[str, float] = {}
     max_predicted_peak = 0.0
     for spec in build_sample_specs("guitar"):
-        rms = rms_map.get(spec.id, 0.0)
-        if rms <= 0:
+        blended = blended_map.get(spec.id, 0.0)
+        if blended <= 0:
             gain = 1.0
         else:
-            gain = target_rms / rms
+            gain = target_rms / blended
         gain = max(GAIN_CLAMP_MIN, min(GAIN_CLAMP_MAX, gain))
         gain_map[spec.id] = gain
-        predicted_peak = peak_map.get(spec.id, 0.0) * gain
+
+    gain_map = smooth_gain_map_by_neighbors(gain_map)
+
+    ordered_specs = sorted(build_sample_specs("guitar"), key=lambda spec: spec.midi)
+    max_step_ratio = pow(10.0, MAX_ADJACENT_GAIN_STEP_DB / 20.0)
+    for index, spec in enumerate(ordered_specs):
+        if index == 0:
+            continue
+        prev_spec = ordered_specs[index - 1]
+        prev_gain = max(gain_map.get(prev_spec.id, 1.0), 1e-12)
+        current_gain = max(gain_map.get(spec.id, 1.0), 1e-12)
+        if current_gain > prev_gain * max_step_ratio:
+            gain_map[spec.id] = prev_gain * max_step_ratio
+        elif current_gain < prev_gain / max_step_ratio:
+            gain_map[spec.id] = prev_gain / max_step_ratio
+
+    max_predicted_peak = 0.0
+    for spec in build_sample_specs("guitar"):
+        predicted_peak = peak_map.get(spec.id, 0.0) * gain_map.get(spec.id, 1.0)
         if predicted_peak > max_predicted_peak:
             max_predicted_peak = predicted_peak
 
@@ -739,6 +924,91 @@ def encode_final_sample(temp_wav_path: Path, output_path: Path, bitrate: str, ga
     subprocess.run(ffmpeg_cmd, check=True)
 
 
+def collect_output_rms_maps(
+    output_dir: Path,
+    sample_rate: int,
+    duration: float,
+) -> tuple[dict[str, float], dict[str, float], dict[str, float], dict[str, float], dict[str, float], dict[str, float]]:
+    output_paths = {
+        spec.midi: output_dir / spec.output_filename
+        for spec in build_sample_specs("guitar")
+    }
+    peak_map, full_rms_map, attack_rms_map, mid_rms_map, tail_rms_map = collect_temp_rms_maps(
+        temp_paths=output_paths,
+        sample_rate=sample_rate,
+        duration=duration,
+    )
+    sustain_ratio_map = {
+        spec.id: max(tail_rms_map.get(spec.id, 0.0), 0.0) / max(attack_rms_map.get(spec.id, 1e-12), 1e-12)
+        for spec in build_sample_specs("guitar")
+    }
+    return peak_map, full_rms_map, attack_rms_map, mid_rms_map, tail_rms_map, sustain_ratio_map
+
+
+def assert_alignment_quality(
+    full_rms_map: dict[str, float],
+    attack_rms_map: dict[str, float],
+    mid_rms_map: dict[str, float],
+    sustain_ratio_map: dict[str, float],
+    gain_map: dict[str, float],
+) -> None:
+    issues: list[str] = []
+    full_spread = _spread_db_percentile(
+        list(full_rms_map.values()),
+        QUALITY_SPREAD_LOW_PERCENTILE,
+        QUALITY_SPREAD_HIGH_PERCENTILE,
+    )
+    attack_spread = _spread_db_percentile(
+        list(attack_rms_map.values()),
+        QUALITY_SPREAD_LOW_PERCENTILE,
+        QUALITY_SPREAD_HIGH_PERCENTILE,
+    )
+    mid_spread = _spread_db_percentile(
+        list(mid_rms_map.values()),
+        QUALITY_SPREAD_LOW_PERCENTILE,
+        QUALITY_SPREAD_HIGH_PERCENTILE,
+    )
+    sustain_spread = _spread_db_percentile(
+        list(sustain_ratio_map.values()),
+        SUSTAIN_SPREAD_LOW_PERCENTILE,
+        SUSTAIN_SPREAD_HIGH_PERCENTILE,
+    )
+
+    if full_spread > MAX_FULL_RMS_SPREAD_DB:
+        issues.append(f"full RMS spread {full_spread:.2f}dB > {MAX_FULL_RMS_SPREAD_DB:.2f}dB")
+    if attack_spread > MAX_ATTACK_RMS_SPREAD_DB:
+        issues.append(f"attack RMS spread {attack_spread:.2f}dB > {MAX_ATTACK_RMS_SPREAD_DB:.2f}dB")
+    if mid_spread > MAX_MID_RMS_SPREAD_DB:
+        issues.append(f"mid RMS spread {mid_spread:.2f}dB > {MAX_MID_RMS_SPREAD_DB:.2f}dB")
+    if sustain_spread > MAX_SUSTAIN_SPREAD_DB:
+        issues.append(f"sustain spread {sustain_spread:.2f}dB > {MAX_SUSTAIN_SPREAD_DB:.2f}dB")
+
+    ordered_specs = sorted(build_sample_specs("guitar"), key=lambda spec: spec.midi)
+    max_adjacent_step = 0.0
+    for index in range(1, len(ordered_specs)):
+        prev_gain = max(gain_map.get(ordered_specs[index - 1].id, 1.0), 1e-12)
+        current_gain = max(gain_map.get(ordered_specs[index].id, 1.0), 1e-12)
+        step_db = abs(20.0 * log10(current_gain / prev_gain))
+        if step_db > max_adjacent_step:
+            max_adjacent_step = step_db
+    if max_adjacent_step > MAX_ADJACENT_GAIN_STEP_DB + 1e-6:
+        issues.append(
+            f"adjacent gain step {max_adjacent_step:.2f}dB > {MAX_ADJACENT_GAIN_STEP_DB:.2f}dB",
+        )
+
+    print(
+        "Quality summary:",
+        f"full_spread_p10_p90={full_spread:.2f}dB",
+        f"attack_spread_p10_p90={attack_spread:.2f}dB",
+        f"mid_spread_p10_p90={mid_spread:.2f}dB",
+        f"sustain_spread_p15_p85={sustain_spread:.2f}dB",
+        f"max_adjacent_gain_step={max_adjacent_step:.2f}dB",
+    )
+
+    if issues:
+        raise SystemExit("Guitar alignment quality gate failed: " + "; ".join(issues))
+
+
 def build_audio_assets(
     output_dir: Path,
     cache_dir: Path,
@@ -747,6 +1017,9 @@ def build_audio_assets(
     bitrate: str,
     refresh_sources: bool,
 ) -> tuple[
+    dict[str, float],
+    dict[str, float],
+    dict[str, float],
     dict[str, float],
     dict[str, float],
     dict[str, float],
@@ -761,7 +1034,11 @@ def build_audio_assets(
     native = collect_native_selections(cache_dir=cache_dir, sample_rate=sample_rate)
 
     peak_map: dict[str, float] = {}
-    rms_map: dict[str, float] = {}
+    full_rms_map: dict[str, float] = {}
+    attack_rms_map: dict[str, float] = {}
+    mid_rms_map: dict[str, float] = {}
+    tail_rms_map: dict[str, float] = {}
+    sustain_ratio_map: dict[str, float] = {}
     gain_map: dict[str, float] = {}
     target_rms = 0.0
     global_peak_scale = 1.0
@@ -783,22 +1060,17 @@ def build_audio_assets(
             if wav_path is None or not wav_path.exists():
                 raise SystemExit(f"Missing temp wav for MIDI {spec.midi} ({spec.id})")
 
-        peak_map, rms_map, _target_rms = repair_low_energy_temp_wavs(
+        peak_map, full_rms_map, attack_rms_map, mid_rms_map, tail_rms_map, sustain_ratio_map = repair_low_sustain_temp_wavs(
             temp_paths=temp_paths,
             sample_rate=sample_rate,
             duration=duration,
         )
-        peak_map, rms_map, tonal_ratio_map = repair_low_tonal_ratio_temp_wavs(
-            temp_paths=temp_paths,
+        gain_map, target_rms, global_peak_scale = compute_gain_map_from_blended_rms(
             peak_map=peak_map,
-            rms_map=rms_map,
-            sample_rate=sample_rate,
-            duration=duration,
-        )
-
-        gain_map, target_rms, global_peak_scale = compute_gain_map_from_full_rms(
-            peak_map=peak_map,
-            rms_map=rms_map,
+            full_rms_map=full_rms_map,
+            attack_rms_map=attack_rms_map,
+            mid_rms_map=mid_rms_map,
+            tail_rms_map=tail_rms_map,
         )
 
         for spec in build_sample_specs("guitar"):
@@ -810,7 +1082,38 @@ def build_audio_assets(
                 gain=gain_map.get(spec.id, 1.0),
             )
 
-    return peak_map, rms_map, tonal_ratio_map, gain_map, target_rms, global_peak_scale, native
+    (
+        peak_map,
+        full_rms_map,
+        attack_rms_map,
+        mid_rms_map,
+        tail_rms_map,
+        sustain_ratio_map,
+    ) = collect_output_rms_maps(
+        output_dir=output_dir,
+        sample_rate=sample_rate,
+        duration=duration,
+    )
+    assert_alignment_quality(
+        full_rms_map=full_rms_map,
+        attack_rms_map=attack_rms_map,
+        mid_rms_map=mid_rms_map,
+        sustain_ratio_map=sustain_ratio_map,
+        gain_map=gain_map,
+    )
+
+    return (
+        peak_map,
+        full_rms_map,
+        attack_rms_map,
+        mid_rms_map,
+        tail_rms_map,
+        sustain_ratio_map,
+        gain_map,
+        target_rms,
+        global_peak_scale,
+        native,
+    )
 
 
 def write_manifest(
@@ -819,8 +1122,11 @@ def write_manifest(
     sample_rate: int,
     bitrate: str,
     peak_map: dict[str, float],
-    rms_map: dict[str, float],
-    tonal_ratio_map: dict[str, float],
+    full_rms_map: dict[str, float],
+    attack_rms_map: dict[str, float],
+    mid_rms_map: dict[str, float],
+    tail_rms_map: dict[str, float],
+    sustain_ratio_map: dict[str, float],
     gain_map: dict[str, float],
     target_rms: float,
     global_peak_scale: float,
@@ -831,8 +1137,43 @@ def write_manifest(
     max_error_cents, worst = worst_mapping_error(equal_targets, instrument="guitar")
 
     peak_values = [value for value in peak_map.values() if value > 0]
-    rms_values = [value for value in rms_map.values() if value > 0]
+    full_rms_values = [value for value in full_rms_map.values() if value > 0]
+    attack_rms_values = [value for value in attack_rms_map.values() if value > 0]
+    mid_rms_values = [value for value in mid_rms_map.values() if value > 0]
+    tail_rms_values = [value for value in tail_rms_map.values() if value > 0]
+    sustain_values = [value for value in sustain_ratio_map.values() if value > 0]
     gain_values = [value for value in gain_map.values() if value > 0]
+    quality = {
+        "spreadMethod": {
+            "fullRms": f"p{int(QUALITY_SPREAD_LOW_PERCENTILE * 100)}_p{int(QUALITY_SPREAD_HIGH_PERCENTILE * 100)}",
+            "attackRms": f"p{int(QUALITY_SPREAD_LOW_PERCENTILE * 100)}_p{int(QUALITY_SPREAD_HIGH_PERCENTILE * 100)}",
+            "midRms": f"p{int(QUALITY_SPREAD_LOW_PERCENTILE * 100)}_p{int(QUALITY_SPREAD_HIGH_PERCENTILE * 100)}",
+            "sustainRatio": f"p{int(SUSTAIN_SPREAD_LOW_PERCENTILE * 100)}_p{int(SUSTAIN_SPREAD_HIGH_PERCENTILE * 100)}",
+        },
+        "fullRmsSpreadDb": round(
+            _spread_db_percentile(full_rms_values, QUALITY_SPREAD_LOW_PERCENTILE, QUALITY_SPREAD_HIGH_PERCENTILE),
+            4,
+        ),
+        "attackRmsSpreadDb": round(
+            _spread_db_percentile(attack_rms_values, QUALITY_SPREAD_LOW_PERCENTILE, QUALITY_SPREAD_HIGH_PERCENTILE),
+            4,
+        ),
+        "midRmsSpreadDb": round(
+            _spread_db_percentile(mid_rms_values, QUALITY_SPREAD_LOW_PERCENTILE, QUALITY_SPREAD_HIGH_PERCENTILE),
+            4,
+        ),
+        "sustainSpreadDb": round(
+            _spread_db_percentile(sustain_values, SUSTAIN_SPREAD_LOW_PERCENTILE, SUSTAIN_SPREAD_HIGH_PERCENTILE),
+            4,
+        ),
+        "thresholdsDb": {
+            "full": MAX_FULL_RMS_SPREAD_DB,
+            "attack": MAX_ATTACK_RMS_SPREAD_DB,
+            "mid": MAX_MID_RMS_SPREAD_DB,
+            "sustain": MAX_SUSTAIN_SPREAD_DB,
+            "adjacentGainStep": MAX_ADJACENT_GAIN_STEP_DB,
+        },
+    }
     selection_metadata = {
         str(midi): {
             "source": selection.source_filename,
@@ -863,27 +1204,45 @@ def write_manifest(
             "startPrerollMs": int(round(START_PREROLL_SEC * 1000)),
         },
         "normalization": {
-            "method": "full_window_rms_with_global_peak_guard",
-            "targetRms": round(target_rms, 8),
+            "method": "full_window_dominant_rms_with_neighbor_smoothing_and_peak_guard",
+            "targetBlendedRms": round(target_rms, 8),
             "targetPeakLinear": TARGET_PEAK_LINEAR,
             "globalPeakScale": round(global_peak_scale, 8),
             "peakRange": [round(min(peak_values), 6), round(max(peak_values), 6)] if peak_values else [0.0, 0.0],
-            "windowRmsMs": int(round(duration * 1000)),
-            "windowRmsRange": [round(min(rms_values), 8), round(max(rms_values), 8)] if rms_values else [0.0, 0.0],
+            "fullWindowRmsMs": int(round(duration * 1000)),
+            "fullWindowRmsRange": [round(min(full_rms_values), 8), round(max(full_rms_values), 8)]
+            if full_rms_values
+            else [0.0, 0.0],
+            "attackWindowRmsMs": int(round(min(ATTACK_ANALYSIS_SEC, duration) * 1000)),
+            "attackWindowRmsRange": [round(min(attack_rms_values), 8), round(max(attack_rms_values), 8)]
+            if attack_rms_values
+            else [0.0, 0.0],
+            "midWindowStartMs": int(round(min(MID_WINDOW_START_SEC, duration) * 1000)),
+            "midWindowRmsMs": int(round(min(MID_WINDOW_DURATION_SEC, duration) * 1000)),
+            "midWindowRmsRange": [round(min(mid_rms_values), 8), round(max(mid_rms_values), 8)]
+            if mid_rms_values
+            else [0.0, 0.0],
+            "tailWindowRmsMs": int(round(min(TAIL_ANALYSIS_SEC, duration) * 1000)),
+            "tailWindowRmsRange": [round(min(tail_rms_values), 8), round(max(tail_rms_values), 8)]
+            if tail_rms_values
+            else [0.0, 0.0],
+            "sustainRatioRange": [round(min(sustain_values), 8), round(max(sustain_values), 8)]
+            if sustain_values
+            else [0.0, 0.0],
+            "sustainRepair": {
+                "ratioFloor": SUSTAIN_RATIO_FLOOR,
+                "donorRatio": SUSTAIN_DONOR_RATIO,
+                "maxSemitoneDistance": SUSTAIN_REPAIR_MAX_SEMITONES,
+                "maxPasses": SUSTAIN_REPAIR_MAX_PASSES,
+            },
+            "gainSmoothing": {
+                "lambda": GAIN_SMOOTHING_LAMBDA,
+                "passes": GAIN_SMOOTHING_PASSES,
+            },
             "gainClamp": [GAIN_CLAMP_MIN, GAIN_CLAMP_MAX],
             "gainRange": [round(min(gain_values), 8), round(max(gain_values), 8)] if gain_values else [1.0, 1.0],
-            "lowRmsRepairFloorRatio": LOW_RMS_FLOOR_RATIO,
-            "lowRmsDonorRatio": LOW_RMS_DONOR_RATIO,
-            "tonalRepairHighpassHz": TONAL_HIGHPASS_HZ,
-            "tonalRatioFloor": TONAL_RATIO_FLOOR,
-            "tonalDonorRatio": TONAL_DONOR_RATIO,
-            "tonalRatioRange": [
-                round(min(tonal_ratio_map.values()), 6),
-                round(max(tonal_ratio_map.values()), 6),
-            ]
-            if tonal_ratio_map
-            else [0.0, 0.0],
         },
+        "quality": quality,
         "fillEdges": {
             "strategy": "offline_pitch_shift_from_nearest_native",
             "mapping": {str(target): source for target, source in FILL_EDGE_MAP.items()},
@@ -907,7 +1266,11 @@ def write_manifest(
                 "hz": round(spec.hz, 6),
                 "durationMs": int(round(duration * 1000)),
                 "gainApplied": round(gain_map.get(spec.id, 1.0), 8),
-                "windowRms": round(rms_map.get(spec.id, 0.0), 8),
+                "windowRms": round(full_rms_map.get(spec.id, 0.0), 8),
+                "attackRms": round(attack_rms_map.get(spec.id, 0.0), 8),
+                "midRms": round(mid_rms_map.get(spec.id, 0.0), 8),
+                "tailRms": round(tail_rms_map.get(spec.id, 0.0), 8),
+                "sustainRatio": round(sustain_ratio_map.get(spec.id, 0.0), 8),
                 "file": f"/assets/audio/guitar/{spec.output_filename}",
             }
             for spec in sample_specs
@@ -947,7 +1310,18 @@ def main() -> None:
     if args.clean and output_dir.exists():
         shutil.rmtree(output_dir)
 
-    peak_map, rms_map, tonal_ratio_map, gain_map, target_rms, global_peak_scale, native = build_audio_assets(
+    (
+        peak_map,
+        full_rms_map,
+        attack_rms_map,
+        mid_rms_map,
+        tail_rms_map,
+        sustain_ratio_map,
+        gain_map,
+        target_rms,
+        global_peak_scale,
+        native,
+    ) = build_audio_assets(
         output_dir=output_dir,
         cache_dir=cache_dir,
         duration=args.duration,
@@ -962,8 +1336,11 @@ def main() -> None:
         sample_rate=args.sample_rate,
         bitrate=args.bitrate,
         peak_map=peak_map,
-        rms_map=rms_map,
-        tonal_ratio_map=tonal_ratio_map,
+        full_rms_map=full_rms_map,
+        attack_rms_map=attack_rms_map,
+        mid_rms_map=mid_rms_map,
+        tail_rms_map=tail_rms_map,
+        sustain_ratio_map=sustain_ratio_map,
         gain_map=gain_map,
         target_rms=target_rms,
         global_peak_scale=global_peak_scale,

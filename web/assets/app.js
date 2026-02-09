@@ -4,7 +4,7 @@ const AUDIO_DEBUG_ENABLED = new URLSearchParams(window.location.search).get("aud
 const NOTE_GAP_MS = 250;
 const SETTINGS_VERSION = 5;
 const MAX_CENTS_ERROR = 10;
-const MAX_POLYPHONY = 5;
+const MAX_POLYPHONY = 10;
 const SAMPLE_PRELOAD_CONCURRENCY = 4;
 const AUDIO_DEBUG_LOG_LIMIT = 40;
 const AUDIO_UNLOCK_TIMEOUT_MS = 800;
@@ -1664,6 +1664,11 @@ function scheduleRawSample(context, sampleId, startAt) {
   const cleanup = () => {
     source.__alive = false;
     state.activeVoices = state.activeVoices.filter((voice) => voice !== source);
+    try {
+      source.disconnect();
+    } catch {
+      // Ignore disconnect errors on already-disconnected nodes.
+    }
   };
   source.onended = cleanup;
 

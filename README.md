@@ -80,7 +80,7 @@ This version uses **raw sample playback only** for all playback (quiz + keyboard
   - no runtime timbre shaping
   - quiz playback always uses full raw sample length
   - keyboard playback always triggers full sample-length one-shot per tap
-  - polyphony cap = 5 active voices (extra taps are ignored until a voice slot frees)
+  - polyphony cap = 10 active voices (extra taps are ignored until a voice slot frees)
 
 Current built package sizes:
 
@@ -164,8 +164,9 @@ git fetch --all
 git checkout main
 git pull --ff-only
 docker compose down
-docker compose up -d --build
+docker compose up -d --build --force-recreate
 docker compose ps
+docker compose logs -f --tail=80
 ```
 
 Open:
@@ -229,7 +230,7 @@ If your Linux server LAN IP is `192.168.86.45`, devices on the same LAN can use:
   - left side: `Oct+` and `Oct-` for octave shift
   - hold `Oct+` and `Oct-` together for ~400ms to return to compact mode
 - Each tap triggers the full raw sample length of the selected instrument (piano 1.0s, guitar 1.5s), independent of press length
-- Up to 5 notes can overlap; above that new taps are dropped
+- Up to 10 notes can overlap; above that new taps are dropped
 
 ## iOS Audio Unlock Behavior
 
@@ -238,6 +239,16 @@ If your Linux server LAN IP is `192.168.86.45`, devices on the same LAN can use:
 - AudioContext recreation is delayed until repeated failures, reducing false failures on iPhone Safari refresh.
 
 If audio is silent right after refresh on iPhone, tap once on any keyboard key or `Repeat` to trigger the next unlock attempt.
+
+## Docker Build SSL Note (Corporate Network)
+
+If build fails with `CERTIFICATE_VERIFY_FAILED`, pass trusted hosts to pip during build:
+
+```bash
+docker compose build \
+  --build-arg PIP_EXTRA_ARGS="--trusted-host pypi.org --trusted-host files.pythonhosted.org"
+docker compose up -d --force-recreate
+```
 
 ## API
 

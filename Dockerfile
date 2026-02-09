@@ -3,10 +3,12 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+ARG PIP_EXTRA_ARGS=""
+
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN sh -c "pip install --no-cache-dir ${PIP_EXTRA_ARGS} -r requirements.txt"
 
 COPY app ./app
 COPY web ./web

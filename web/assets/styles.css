@@ -465,6 +465,15 @@ select {
   backdrop-filter: blur(4px);
 }
 
+.touch-keyboard-panel,
+.touch-keyboard-panel *,
+.full-keyboard-overlay,
+.full-keyboard-overlay * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
 .touch-keyboard-top {
   display: flex;
   align-items: center;
@@ -492,6 +501,7 @@ select {
   min-height: 44px;
   padding: 0.35rem 0;
   font-weight: 700;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .touch-key:active {
@@ -529,9 +539,10 @@ select {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.08);
   padding: 0.7rem;
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
   gap: 0.55rem;
-  align-content: start;
 }
 
 .full-octave-key {
@@ -544,6 +555,7 @@ select {
   color: rgba(239, 249, 251, 0.92);
   font-size: 0.76rem;
   line-height: 1.28;
+  margin-bottom: 0.3rem;
 }
 
 .full-keyboard-rows {
@@ -567,13 +579,14 @@ select {
 }
 
 .full-keyboard-row-top .full-touch-key {
-  grid-column: 2 / 3;
+  grid-column: 1 / 2;
 }
 
 .full-touch-key {
   min-height: clamp(64px, 13vh, 110px);
   font-size: clamp(1.12rem, 2vw, 1.45rem);
   font-weight: 700;
+  -webkit-tap-highlight-color: transparent;
 }
 
 @media (max-width: 720px) {
@@ -610,13 +623,15 @@ select {
 
   .full-keyboard-shell {
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: 1fr auto;
     gap: 0.5rem;
   }
 
   .full-keyboard-controls {
+    display: grid;
     grid-template-columns: 1fr 1fr;
-    align-items: center;
+    align-items: end;
+    justify-content: stretch;
   }
 
   .full-keyboard-exit-hint {
