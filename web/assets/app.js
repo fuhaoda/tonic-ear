@@ -61,7 +61,6 @@ async function init() {
     switchView("dashboardView");
     window.history.replaceState({ view: "dashboardView" }, "");
     window.addEventListener("popstate", handlePopState);
-    primeAudioPipeline();
   } catch (error) {
     showGlobalError(error.message || "Failed to initialize app");
   }
@@ -143,8 +142,7 @@ function bindStaticEvents() {
   });
 
   window.addEventListener("keydown", handleGlobalToneKeydown);
-  window.addEventListener("pointerdown", warmAudioPipelineOnce, { once: true, capture: true });
-  window.addEventListener("keydown", warmAudioPipelineOnce, { once: true, capture: true });
+  armAudioUnlockListeners();
 
   ui.touchKeyboardButtons.addEventListener("pointerdown", handleTouchKeyboardPointerDown);
 
@@ -279,7 +277,6 @@ function onSettingsChange() {
   state.settings.temperament = ui.temperamentSelect.value;
   state.keyboardTonePlan = null;
   persistSettings();
-  primeAudioPipeline();
 }
 
 function setVisualHints(enabled) {
@@ -917,22 +914,42 @@ async function ensureAudioContextRunning() {
     return context;
   }
   await unlockAudioPipeline();
+  if (context.state !== "running") {
+    throw new Error("Audio context is not running");
+  }
   return context;
 }
 
 function warmAudioPipelineOnce() {
-  void unlockAudioPipeline();
+  if (state.audioUnlocked) {
+    removeAudioUnlockListeners();
+    return;
+  }
+  void unlockAudioPipeline()
+    .then(() => {
+      if (state.audioUnlocked) {
+        removeAudioUnlockListeners();
+      }
+    })
+    .catch(() => {
+      // Keep listeners active for the next user gesture.
+    });
 }
 
-function primeAudioPipeline() {
-  try {
-    getOrCreateAudioContext();
-    void preloadAllSamples().catch(() => {
-      // Best effort warmup.
-    });
-  } catch {
-    // Best effort warmup.
-  }
+function armAudioUnlockListeners() {
+  const options = { capture: true };
+  window.addEventListener("pointerdown", warmAudioPipelineOnce, options);
+  window.addEventListener("touchstart", warmAudioPipelineOnce, options);
+  window.addEventListener("click", warmAudioPipelineOnce, options);
+  window.addEventListener("keydown", warmAudioPipelineOnce, options);
+}
+
+function removeAudioUnlockListeners() {
+  const options = { capture: true };
+  window.removeEventListener("pointerdown", warmAudioPipelineOnce, options);
+  window.removeEventListener("touchstart", warmAudioPipelineOnce, options);
+  window.removeEventListener("click", warmAudioPipelineOnce, options);
+  window.removeEventListener("keydown", warmAudioPipelineOnce, options);
 }
 
 async function unlockAudioPipeline() {
@@ -946,6 +963,7 @@ async function unlockAudioPipeline() {
     state.audioUnlockPromise = context
       .resume()
       .then(() => {
+        primeAudioContextTick(context);
         state.audioUnlocked = true;
       })
       .finally(() => {
@@ -1003,9 +1021,15 @@ async function ensureSampleBuffer(context, sampleId) {
     const encoded = await response.arrayBuffer();
     const decoded = await decodeAudioData(context, encoded);
     state.sampleBufferCache.set(sampleId, decoded);
-    state.sampleFetchPromises.delete(sampleId);
     return decoded;
-  })();
+  })()
+    .catch((error) => {
+      state.sampleBufferCache.delete(sampleId);
+      throw error;
+    })
+    .finally(() => {
+      state.sampleFetchPromises.delete(sampleId);
+    });
 
   state.sampleFetchPromises.set(sampleId, promise);
   return promise;
@@ -1024,6 +1048,21 @@ function decodeAudioData(context, encoded) {
       promiseLike.then(resolve).catch(reject);
     }
   });
+}
+
+function primeAudioContextTick(context) {
+  const gainNode = context.createGain();
+  gainNode.gain.value = 0.00001;
+
+  const oscillator = context.createOscillator();
+  oscillator.type = "sine";
+  oscillator.frequency.value = 880;
+  oscillator.connect(gainNode);
+  gainNode.connect(context.destination);
+
+  const now = context.currentTime;
+  oscillator.start(now);
+  oscillator.stop(now + 0.01);
 }
 
 function mapTargetHzToSample(targetHz) {
