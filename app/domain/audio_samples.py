@@ -1,4 +1,4 @@
-"""Piano sample definitions and equal-temperament sample mapping helpers."""
+"""Instrument sample definitions and equal-temperament sample mapping helpers."""
 
 from __future__ import annotations
 
@@ -11,19 +11,20 @@ from app.domain.music import EQUAL_TEMPERAMENT, GENDER_OPTIONS, KEY_OPTIONS, cal
 SAMPLE_MIN_HZ = 70.0
 SAMPLE_MAX_HZ = 1000.0
 MAX_CENTS_ERROR = 10.0
+SUPPORTED_INSTRUMENTS = ("piano", "guitar")
 
 NOTE_NAMES_FLAT = ("C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B")
 
 
 @dataclass(frozen=True)
 class SampleSpec:
-    """Definition for one downloadable piano sample."""
+    """Definition for one downloadable sample."""
 
     id: str
     midi: int
     note: str
     hz: float
-    source_filename: str
+    source_filename: str | None
     output_filename: str
 
 
@@ -32,6 +33,7 @@ class FrequencyMapping:
     """Mapping from target frequency to nearest raw sample."""
 
     target_hz: float
+    instrument: str
     sample_id: str
     midi: int
     sample_hz: float
@@ -59,55 +61,67 @@ def _available_midi_values() -> tuple[int, ...]:
     return values
 
 
-@lru_cache(maxsize=1)
-def _sample_spec_tuple() -> tuple[SampleSpec, ...]:
+def validate_instrument(instrument: str) -> str:
+    """Validate instrument id and return normalized id."""
+
+    if instrument not in SUPPORTED_INSTRUMENTS:
+        raise ValueError(f"Unknown instrument '{instrument}'")
+    return instrument
+
+
+@lru_cache(maxsize=8)
+def _sample_spec_tuple(instrument: str = "piano") -> tuple[SampleSpec, ...]:
+    instrument = validate_instrument(instrument)
     specs: list[SampleSpec] = []
     for midi in _available_midi_values():
         note = midi_to_note_name(midi)
         sample_id = f"m{midi:03d}"
+        source_filename = f"Piano.ff.{note}.aiff" if instrument == "piano" else None
         specs.append(
             SampleSpec(
                 id=sample_id,
                 midi=midi,
                 note=note,
                 hz=midi_to_hz(midi),
-                source_filename=f"Piano.ff.{note}.aiff",
+                source_filename=source_filename,
                 output_filename=f"{sample_id}.m4a",
             )
         )
     return tuple(specs)
 
 
-def build_sample_specs() -> list[SampleSpec]:
-    """Return all 88 raw piano sample definitions (A0..C8)."""
+def build_sample_specs(instrument: str = "piano") -> list[SampleSpec]:
+    """Return all sample definitions for one instrument."""
 
-    return list(_sample_spec_tuple())
-
-
-@lru_cache(maxsize=1)
-def _sample_by_midi() -> dict[int, SampleSpec]:
-    return {spec.midi: spec for spec in _sample_spec_tuple()}
+    return list(_sample_spec_tuple(instrument))
 
 
-@lru_cache(maxsize=1)
-def _sample_by_id() -> dict[str, SampleSpec]:
-    return {spec.id: spec for spec in _sample_spec_tuple()}
+@lru_cache(maxsize=8)
+def _sample_by_midi(instrument: str = "piano") -> dict[int, SampleSpec]:
+    return {spec.midi: spec for spec in _sample_spec_tuple(instrument)}
 
 
-def get_sample_for_midi(midi: int) -> SampleSpec:
+@lru_cache(maxsize=8)
+def _sample_by_id(instrument: str = "piano") -> dict[str, SampleSpec]:
+    return {spec.id: spec for spec in _sample_spec_tuple(instrument)}
+
+
+def get_sample_for_midi(midi: int, instrument: str = "piano") -> SampleSpec:
     """Return nearest available sample spec for a MIDI note."""
 
+    instrument = validate_instrument(instrument)
     available = _available_midi_values()
     nearest = min(available, key=lambda value: abs(value - int(midi)))
-    return _sample_by_midi()[nearest]
+    return _sample_by_midi(instrument)[nearest]
 
 
-def get_sample_by_id(sample_id: str) -> SampleSpec:
+def get_sample_by_id(sample_id: str, instrument: str = "piano") -> SampleSpec:
     """Resolve one sample id to its spec."""
 
-    sample = _sample_by_id().get(sample_id)
+    instrument = validate_instrument(instrument)
+    sample = _sample_by_id(instrument).get(sample_id)
     if sample is None:
-        raise ValueError(f"Unknown sample id '{sample_id}'")
+        raise ValueError(f"Unknown sample id '{sample_id}' for instrument '{instrument}'")
     return sample
 
 
@@ -131,18 +145,20 @@ def get_unique_equal_temperament_targets() -> list[float]:
     return _dedupe_sorted_floats(frequencies)
 
 
-def map_target_frequency(target_hz: float) -> FrequencyMapping:
+def map_target_frequency(target_hz: float, instrument: str = "piano") -> FrequencyMapping:
     """Map a target frequency to nearest raw sample (no playback-rate correction)."""
 
     if target_hz <= 0:
         raise ValueError(f"target_hz must be positive, got {target_hz}")
 
-    samples = _sample_spec_tuple()
+    instrument = validate_instrument(instrument)
+    samples = _sample_spec_tuple(instrument)
     sample = min(samples, key=lambda item: abs(1200 * log2(target_hz / item.hz)))
     cents_error = 1200 * log2(target_hz / sample.hz)
 
     return FrequencyMapping(
         target_hz=target_hz,
+        instrument=instrument,
         sample_id=sample.id,
         midi=sample.midi,
         sample_hz=sample.hz,
@@ -150,13 +166,14 @@ def map_target_frequency(target_hz: float) -> FrequencyMapping:
     )
 
 
-def worst_mapping_error(targets: list[float] | None = None) -> tuple[float, FrequencyMapping]:
+def worst_mapping_error(targets: list[float] | None = None, instrument: str = "piano") -> tuple[float, FrequencyMapping]:
     """Return worst absolute cents error for provided targets."""
 
+    instrument = validate_instrument(instrument)
     checked_targets = targets if targets is not None else get_unique_equal_temperament_targets()
     if not checked_targets:
         raise ValueError("targets must not be empty")
 
-    mappings = [map_target_frequency(target) for target in checked_targets]
+    mappings = [map_target_frequency(target, instrument=instrument) for target in checked_targets]
     worst = max(mappings, key=lambda mapping: abs(mapping.cents_error))
     return abs(worst.cents_error), worst

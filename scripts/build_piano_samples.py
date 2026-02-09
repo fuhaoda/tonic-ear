@@ -13,6 +13,7 @@ from statistics import median
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import quote
 from urllib.request import urlretrieve
 
@@ -260,6 +261,8 @@ def write_manifest(
 
     manifest = {
         "version": 4,
+        "instrument": "piano",
+        "buildId": int(time.time()),
         "source": "University of Iowa MIS Piano (ff)",
         "sourceUrl": SOURCE_BASE_URL,
         "durationMs": int(round(duration * 1000)),

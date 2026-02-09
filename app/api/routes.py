@@ -24,6 +24,7 @@ def create_session(payload: SessionCreateRequest) -> dict:
             gender=payload.gender,
             key=payload.key,
             temperament=payload.temperament,
+            instrument=payload.instrument,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

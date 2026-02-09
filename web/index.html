@@ -28,6 +28,10 @@
           <h2>Training Settings</h2>
           <div class="settings-grid">
             <label>
+              Instrument
+              <select id="instrumentSelect"></select>
+            </label>
+            <label>
               Gender
               <select id="genderSelect"></select>
             </label>
@@ -132,7 +136,10 @@
     </main>
 
     <section class="touch-keyboard-panel" id="touchKeyboardPanel" aria-label="Touch keyboard">
-      <p class="subtle">Tap 1-7 to play one-shot piano notes</p>
+      <div class="touch-keyboard-top">
+        <p id="touchKeyboardHint" class="subtle">Tap 1-7 to play one-shot notes</p>
+        <button id="openFullKeyboardBtn" class="btn touch-full-toggle" type="button">Full Keyboard</button>
+      </div>
       <div class="touch-keyboard-buttons" id="touchKeyboardButtons">
         <button class="btn touch-key" type="button" data-degree="1">1</button>
         <button class="btn touch-key" type="button" data-degree="2">2</button>
@@ -141,6 +148,47 @@
         <button class="btn touch-key" type="button" data-degree="5">5</button>
         <button class="btn touch-key" type="button" data-degree="6">6</button>
         <button class="btn touch-key" type="button" data-degree="7">7</button>
+      </div>
+    </section>
+
+    <section id="fullKeyboardOverlay" class="full-keyboard-overlay hidden" aria-label="Full keyboard mode">
+      <div class="full-keyboard-shell">
+        <div class="full-keyboard-controls">
+          <button
+            id="fullKeyboardOctUp"
+            class="btn full-octave-key"
+            type="button"
+            data-octave-shift="1"
+            aria-label="Octave up"
+          >
+            Oct +
+          </button>
+          <button
+            id="fullKeyboardOctDown"
+            class="btn full-octave-key"
+            type="button"
+            data-octave-shift="-1"
+            aria-label="Octave down"
+          >
+            Oct -
+          </button>
+          <p class="subtle full-keyboard-exit-hint">Hold Oct+ and Oct- to return</p>
+        </div>
+        <div id="fullKeyboardButtons" class="full-keyboard-rows" aria-label="Full keyboard buttons">
+          <div class="full-keyboard-row full-keyboard-row-top">
+            <button class="btn touch-key full-touch-key" type="button" data-full-degree="7">7</button>
+          </div>
+          <div class="full-keyboard-row">
+            <button class="btn touch-key full-touch-key" type="button" data-full-degree="4">4</button>
+            <button class="btn touch-key full-touch-key" type="button" data-full-degree="5">5</button>
+            <button class="btn touch-key full-touch-key" type="button" data-full-degree="6">6</button>
+          </div>
+          <div class="full-keyboard-row">
+            <button class="btn touch-key full-touch-key" type="button" data-full-degree="1">1</button>
+            <button class="btn touch-key full-touch-key" type="button" data-full-degree="2">2</button>
+            <button class="btn touch-key full-touch-key" type="button" data-full-degree="3">3</button>
+          </div>
+        </div>
       </div>
     </section>
 

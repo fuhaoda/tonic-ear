@@ -1,14 +1,15 @@
 const API_BASE = "/api/v1";
-const PIANO_MANIFEST_PATH = "/assets/audio/piano/manifest.json";
 const AUDIO_DEBUG_ENABLED = new URLSearchParams(window.location.search).get("audio_debug") === "1";
 
 const NOTE_GAP_MS = 250;
-const SETTINGS_VERSION = 4;
+const SETTINGS_VERSION = 5;
 const MAX_CENTS_ERROR = 10;
 const MAX_POLYPHONY = 5;
 const SAMPLE_PRELOAD_CONCURRENCY = 4;
 const AUDIO_DEBUG_LOG_LIMIT = 40;
-const AUDIO_UNLOCK_TIMEOUT_MS = 500;
+const AUDIO_UNLOCK_TIMEOUT_MS = 800;
+const AUDIO_UNLOCK_RECREATE_FAILURE_THRESHOLD = 2;
+const FULL_KEYBOARD_EXIT_HOLD_MS = 400;
 
 const NATURAL_DEGREE_TO_SEMITONE = {
   1: 0,
@@ -39,6 +40,8 @@ const state = {
   audioUnlockPromise: null,
   isPlaying: false,
   audioManifest: null,
+  audioManifestInstrument: null,
+  audioAssetVersion: null,
   sampleById: new Map(),
   sampleBufferCache: new Map(),
   sampleFetchPromises: new Map(),
@@ -46,8 +49,15 @@ const state = {
   activeVoices: [],
   audioDebugLines: [],
   audioUnlockFailures: 0,
+  audioUnlockPendingGesture: false,
   lastAudioDebugMessage: "",
   lastAudioSessionType: null,
+  keyboardMode: "compact",
+  touchOctaveUpActive: false,
+  touchOctaveDownActive: false,
+  touchOctaveShift: 0,
+  octaveExitHoldTimer: null,
+  fullKeyboardPointerTargets: new Map(),
 };
 
 const ui = {};
@@ -56,13 +66,16 @@ window.addEventListener("DOMContentLoaded", init);
 
 async function init() {
   cacheElements();
+  if (ui.fullKeyboardOverlay) {
+    ui.fullKeyboardOverlay.setAttribute("aria-hidden", "true");
+  }
   bindStaticEvents();
   setupAudioDebugPanel();
 
   try {
     await loadMeta();
-    await loadAudioManifest();
     hydrateSettings();
+    await ensureManifestForInstrument(state.settings.instrument);
     renderSettingsControls();
     renderModuleGrid();
     renderHistory();
@@ -82,6 +95,7 @@ function cacheElements() {
   ui.resultView = document.getElementById("resultView");
 
   ui.genderSelect = document.getElementById("genderSelect");
+  ui.instrumentSelect = document.getElementById("instrumentSelect");
   ui.keySelect = document.getElementById("keySelect");
   ui.temperamentSelect = document.getElementById("temperamentSelect");
   ui.showVisualHints = document.getElementById("showVisualHints");
@@ -109,7 +123,14 @@ function cacheElements() {
   ui.backToHomeBtn = document.getElementById("backToHomeBtn");
   ui.retryModuleBtn = document.getElementById("retryModuleBtn");
   ui.resetProgressBtn = document.getElementById("resetProgressBtn");
+  ui.touchKeyboardPanel = document.getElementById("touchKeyboardPanel");
   ui.touchKeyboardButtons = document.getElementById("touchKeyboardButtons");
+  ui.touchKeyboardHint = document.getElementById("touchKeyboardHint");
+  ui.openFullKeyboardBtn = document.getElementById("openFullKeyboardBtn");
+  ui.fullKeyboardOverlay = document.getElementById("fullKeyboardOverlay");
+  ui.fullKeyboardButtons = document.getElementById("fullKeyboardButtons");
+  ui.fullKeyboardOctUp = document.getElementById("fullKeyboardOctUp");
+  ui.fullKeyboardOctDown = document.getElementById("fullKeyboardOctDown");
 
   ui.audioDebugPanel = document.getElementById("audioDebugPanel");
   ui.audioDebugStatus = document.getElementById("audioDebugStatus");
@@ -129,9 +150,18 @@ function bindStaticEvents() {
     void startSessionFromUserGesture(moduleId);
   });
 
-  ui.genderSelect.addEventListener("change", onSettingsChange);
-  ui.keySelect.addEventListener("change", onSettingsChange);
-  ui.temperamentSelect.addEventListener("change", onSettingsChange);
+  ui.instrumentSelect.addEventListener("change", () => {
+    void onSettingsChange();
+  });
+  ui.genderSelect.addEventListener("change", () => {
+    void onSettingsChange();
+  });
+  ui.keySelect.addEventListener("change", () => {
+    void onSettingsChange();
+  });
+  ui.temperamentSelect.addEventListener("change", () => {
+    void onSettingsChange();
+  });
 
   ui.showVisualHints.addEventListener("change", () => {
     setVisualHints(ui.showVisualHints.checked);
@@ -160,6 +190,17 @@ function bindStaticEvents() {
   armAudioUnlockListeners();
 
   ui.touchKeyboardButtons.addEventListener("pointerdown", handleTouchKeyboardPointerDown);
+  if (ui.openFullKeyboardBtn) {
+    ui.openFullKeyboardBtn.addEventListener("click", () => {
+      openFullKeyboardMode();
+    });
+  }
+  if (ui.fullKeyboardOverlay) {
+    ui.fullKeyboardOverlay.addEventListener("pointerdown", handleFullKeyboardPointerDown);
+  }
+  window.addEventListener("pointerup", handleFullKeyboardPointerUp);
+  window.addEventListener("pointercancel", handleFullKeyboardPointerUp);
+
   if (!window.PointerEvent) {
     ui.touchKeyboardButtons.addEventListener("touchstart", handleTouchKeyboardPointerDown, {
       passive: false,
@@ -259,19 +300,59 @@ async function loadMeta() {
   state.moduleMap = new Map(meta.modules.map((module) => [module.id, module]));
 }
 
-async function loadAudioManifest() {
-  const response = await fetch(PIANO_MANIFEST_PATH, { cache: "no-cache" });
+function isInstrumentSupported(instrumentId) {
+  return Boolean(state.meta?.instruments?.some((instrument) => instrument.id === instrumentId));
+}
+
+function manifestPathForInstrument(instrumentId) {
+  return `/assets/audio/${instrumentId}/manifest.json`;
+}
+
+async function loadAudioManifest(instrumentId) {
+  if (!isInstrumentSupported(instrumentId)) {
+    throw new Error(`Unsupported instrument '${instrumentId}'`);
+  }
+
+  const response = await fetch(manifestPathForInstrument(instrumentId), { cache: "no-cache" });
   if (!response.ok) {
-    throw new Error("Failed to load piano audio manifest");
+    throw new Error(`Failed to load ${instrumentId} audio manifest`);
   }
 
   const manifest = await response.json();
   if (!Array.isArray(manifest.samples) || manifest.samples.length === 0) {
-    throw new Error("Piano manifest is missing sample entries");
+    throw new Error(`${instrumentId} manifest is missing sample entries`);
   }
 
   state.audioManifest = manifest;
   state.sampleById = new Map(manifest.samples.map((item) => [item.id, item]));
+  state.audioManifestInstrument = instrumentId;
+  state.audioAssetVersion = String(manifest.buildId ?? manifest.version ?? "0");
+}
+
+async function ensureManifestForInstrument(instrumentId) {
+  if (state.audioManifest && state.audioManifestInstrument === instrumentId) {
+    return;
+  }
+  await loadAudioManifest(instrumentId);
+}
+
+function resetAudioPlaybackState() {
+  for (const voice of state.activeVoices) {
+    try {
+      voice.stop();
+    } catch {
+      // Ignore race where voice already ended.
+    }
+    try {
+      voice.disconnect();
+    } catch {
+      // Ignore disconnected voice.
+    }
+  }
+  state.activeVoices = [];
+  state.sampleBufferCache.clear();
+  state.sampleFetchPromises.clear();
+  state.keyboardTonePlan = null;
 }
 
 function hydrateSettings() {
@@ -281,6 +362,7 @@ function hydrateSettings() {
   if (!isCurrentVersion) {
     state.settings = {
       version: SETTINGS_VERSION,
+      instrument: state.meta.defaults.instrument,
       gender: state.meta.defaults.gender,
       key: state.meta.defaults.key,
       temperament: state.meta.defaults.temperament,
@@ -292,6 +374,9 @@ function hydrateSettings() {
 
   state.settings = {
     version: SETTINGS_VERSION,
+    instrument: isInstrumentSupported(saved.instrument)
+      ? saved.instrument
+      : state.meta.defaults.instrument,
     gender: saved.gender || state.meta.defaults.gender,
     key: saved.key || state.meta.defaults.key,
     temperament: saved.temperament || state.meta.defaults.temperament,
@@ -303,12 +388,14 @@ function hydrateSettings() {
 }
 
 function renderSettingsControls() {
+  renderSelect(ui.instrumentSelect, state.meta.instruments, state.settings.instrument);
   renderSelect(ui.genderSelect, state.meta.genders, state.settings.gender);
   renderSelect(ui.keySelect, state.meta.keys, state.settings.key);
   renderSelect(ui.temperamentSelect, state.meta.temperaments, state.settings.temperament);
 
   ui.showVisualHints.checked = state.settings.showVisualHints;
   ui.quizShowVisualHints.checked = state.settings.showVisualHints;
+  renderTouchKeyboardHint();
 }
 
 function renderSelect(element, options, selectedId) {
@@ -325,14 +412,45 @@ function renderSelect(element, options, selectedId) {
   }
 }
 
-function onSettingsChange() {
+async function onSettingsChange() {
+  const previousInstrument = state.settings.instrument;
+  const nextInstrument = ui.instrumentSelect.value;
+
   state.settings.version = SETTINGS_VERSION;
+  state.settings.instrument = nextInstrument;
   state.settings.gender = ui.genderSelect.value;
   state.settings.key = ui.keySelect.value;
   state.settings.temperament = ui.temperamentSelect.value;
-  state.keyboardTonePlan = null;
+
+  if (nextInstrument !== previousInstrument) {
+    try {
+      await loadAudioManifest(nextInstrument);
+      resetAudioPlaybackState();
+    } catch (error) {
+      state.settings.instrument = previousInstrument;
+      ui.instrumentSelect.value = previousInstrument;
+      persistSettings();
+      showGlobalError(error.message || "Failed to switch instrument");
+      return;
+    }
+  } else {
+    state.keyboardTonePlan = null;
+  }
+
   persistSettings();
+  renderTouchKeyboardHint();
+  renderModuleGrid();
+  renderHistory();
+  hideGlobalError();
   void preloadKeyboardSamplesIfPossible();
+}
+
+function renderTouchKeyboardHint() {
+  if (!ui.touchKeyboardHint) {
+    return;
+  }
+  const instrumentLabel = getInstrumentLabel(state.settings?.instrument);
+  ui.touchKeyboardHint.textContent = `Tap 1-7 to play one-shot ${instrumentLabel.toLowerCase()} notes`;
 }
 
 function setVisualHints(enabled) {
@@ -347,8 +465,22 @@ function persistSettings() {
   writeStorage(LS_SETTINGS, state.settings);
 }
 
+function getCurrentInstrumentId() {
+  return ui.instrumentSelect?.value || state.settings?.instrument || state.meta?.defaults?.instrument || "piano";
+}
+
+function getInstrumentLabel(instrumentId) {
+  const resolved = instrumentId || "piano";
+  return state.meta?.instruments?.find((item) => item.id === resolved)?.label || resolved;
+}
+
+function moduleStatsStorageKey(moduleId, instrumentId) {
+  return `${moduleId}::${instrumentId || "piano"}`;
+}
+
 function renderModuleGrid() {
   const stats = readStorage(LS_MODULE_STATS, {});
+  const selectedInstrument = getCurrentInstrumentId();
 
   const sortedModules = [...state.meta.modules].sort(
     (a, b) => a.recommendedOrder - b.recommendedOrder,
@@ -373,7 +505,7 @@ function renderModuleGrid() {
 
     const statsRow = document.createElement("p");
     statsRow.className = "subtle";
-    const moduleStat = stats[module.id];
+    const moduleStat = stats[moduleStatsStorageKey(module.id, selectedInstrument)];
     if (moduleStat) {
       statsRow.textContent = `Attempts: ${moduleStat.attempts} | Best: ${moduleStat.bestAccuracy.toFixed(1)}%`;
     } else {
@@ -393,19 +525,23 @@ function renderModuleGrid() {
 
 function renderHistory() {
   const history = readStorage(LS_HISTORY, []);
+  const selectedInstrument = getCurrentInstrumentId();
+  const selectedLabel = getInstrumentLabel(selectedInstrument);
+  const filteredHistory = history.filter((item) => (item.instrument || "piano") === selectedInstrument);
 
-  if (!history.length) {
-    ui.historyList.innerHTML = `<p class="subtle">No training history yet.</p>`;
+  if (!filteredHistory.length) {
+    ui.historyList.innerHTML = `<p class="subtle">No training history yet for ${selectedLabel}.</p>`;
     return;
   }
 
   ui.historyList.innerHTML = "";
-  for (const item of history.slice(0, 8)) {
+  for (const item of filteredHistory.slice(0, 8)) {
     const row = document.createElement("div");
     row.className = "history-row";
 
     const left = document.createElement("div");
-    left.innerHTML = `<strong>${item.moduleId}</strong> <span class="subtle">${item.moduleTitle}</span>`;
+    const instrumentLabel = getInstrumentLabel(item.instrument || "piano");
+    left.innerHTML = `<strong>${item.moduleId}</strong> <span class="subtle">${item.moduleTitle}</span> <span class="subtle">(${instrumentLabel})</span>`;
 
     const right = document.createElement("div");
     const date = new Date(item.completedAt);
@@ -431,17 +567,25 @@ async function startSession(moduleId) {
 
   const payload = {
     moduleId,
+    instrument: ui.instrumentSelect.value,
     gender: ui.genderSelect.value,
     key: ui.keySelect.value,
     temperament: ui.temperamentSelect.value,
   };
 
-  state.settings.gender = payload.gender;
-  state.settings.key = payload.key;
-  state.settings.temperament = payload.temperament;
-  persistSettings();
-
   try {
+    const previousManifestInstrument = state.audioManifestInstrument;
+    await ensureManifestForInstrument(payload.instrument);
+    if (previousManifestInstrument && previousManifestInstrument !== payload.instrument) {
+      resetAudioPlaybackState();
+    }
+
+    state.settings.instrument = payload.instrument;
+    state.settings.gender = payload.gender;
+    state.settings.key = payload.key;
+    state.settings.temperament = payload.temperament;
+    persistSettings();
+
     const response = await fetch(`${API_BASE}/session`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -894,18 +1038,21 @@ function finishSession() {
 
 function saveSessionResult(accuracy) {
   const settings = state.session.settings;
+  const instrument = settings.instrument || "piano";
 
   const history = readStorage(LS_HISTORY, []);
   history.unshift({
     moduleId: settings.moduleId,
     moduleTitle: settings.moduleTitle,
+    instrument,
     accuracy,
     completedAt: new Date().toISOString(),
   });
   writeStorage(LS_HISTORY, history.slice(0, 100));
 
   const stats = readStorage(LS_MODULE_STATS, {});
-  const current = stats[settings.moduleId] || {
+  const statsKey = moduleStatsStorageKey(settings.moduleId, instrument);
+  const current = stats[statsKey] || {
     attempts: 0,
     bestAccuracy: 0,
     lastAccuracy: 0,
@@ -917,7 +1064,7 @@ function saveSessionResult(accuracy) {
   current.lastAccuracy = accuracy;
   current.updatedAt = new Date().toISOString();
 
-  stats[settings.moduleId] = current;
+  stats[statsKey] = current;
   writeStorage(LS_MODULE_STATS, stats);
 }
 
@@ -926,7 +1073,10 @@ function renderResult(correctCount, total, accuracy, wrongItems) {
   const temperamentLabel =
     state.meta?.temperaments.find((item) => item.id === state.session.settings.temperament)?.label ||
     state.session.settings.temperament;
-  ui.scoreDetail.textContent = `Module: ${state.session.settings.moduleId} | Key: 1=${state.session.settings.key} | Temperament: ${temperamentLabel}`;
+  const instrumentLabel = getInstrumentLabel(state.session.settings.instrument || "piano");
+  ui.scoreDetail.textContent =
+    `Module: ${state.session.settings.moduleId} | Instrument: ${instrumentLabel} | ` +
+    `Key: 1=${state.session.settings.key} | Temperament: ${temperamentLabel}`;
 
   ui.mistakeList.innerHTML = "";
 
@@ -994,12 +1144,19 @@ function setAudioDebugStatus(message) {
 async function runAudioDebugUnlock() {
   try {
     setAudioDebugStatus("Unlocking audio...");
-    await unlockAudioPipeline();
+    const unlocked = await unlockAudioPipeline();
     const context = getOrCreateAudioContext();
-    setAudioDebugStatus(
-      `Unlock ok | Context: ${context.state} | Primed: ${state.audioUnlocked ? "yes" : "no"} | Failures: ${state.audioUnlockFailures}`,
-    );
-    appendAudioDebugLog(`Unlock succeeded; context state is '${context.state}'`);
+    if (unlocked && context.state === "running") {
+      setAudioDebugStatus(
+        `Unlock ok | Context: ${context.state} | Primed: ${state.audioUnlocked ? "yes" : "no"} | Failures: ${state.audioUnlockFailures}`,
+      );
+      appendAudioDebugLog(`Unlock succeeded; context state is '${context.state}'`);
+    } else {
+      setAudioDebugStatus(
+        `Unlock pending user gesture | Context: ${context.state} | Failures: ${state.audioUnlockFailures}`,
+      );
+      appendAudioDebugLog("Unlock pending next user gesture");
+    }
   } catch (error) {
     const message = error?.message || "Unlock failed";
     setAudioDebugStatus(message);
@@ -1026,7 +1183,9 @@ async function runAudioDebugWebTone() {
     appendAudioDebugLog("WebAudio test tone scheduled");
   } catch (error) {
     appendAudioDebugLog(`WebAudio test failed: ${error?.message || "unknown error"}`);
-    showGlobalError(error.message || "WebAudio test failed");
+    if (!isAudioUnlockPendingError(error)) {
+      showGlobalError(error.message || "WebAudio test failed");
+    }
   }
 }
 
@@ -1039,7 +1198,9 @@ async function runAudioDebugSample() {
     appendAudioDebugLog("Sample m069 playback scheduled");
   } catch (error) {
     appendAudioDebugLog(`Sample test failed: ${error?.message || "unknown error"}`);
-    showGlobalError(error.message || "Sample playback test failed");
+    if (!isAudioUnlockPendingError(error)) {
+      showGlobalError(error.message || "Sample playback test failed");
+    }
   }
 }
 
@@ -1086,6 +1247,16 @@ async function resumeAudioContextWithTimeout(context, label = "primary") {
   }
 }
 
+function createAudioUnlockPendingError() {
+  const error = new Error("Audio unlock pending user gesture");
+  error.name = "AudioUnlockPendingError";
+  return error;
+}
+
+function isAudioUnlockPendingError(error) {
+  return error?.name === "AudioUnlockPendingError";
+}
+
 async function recreateAudioContext() {
   const previous = state.audioCtx;
   state.audioCtx = null;
@@ -1123,15 +1294,18 @@ async function ensureAudioContextRunning() {
     return context;
   }
   configureAudioSessionIfSupported();
-  await unlockAudioPipeline();
+  let unlocked = await unlockAudioPipeline();
   // unlockAudioPipeline may recreate AudioContext on iOS; always re-read the latest instance.
   context = state.audioCtx || context;
-  if (context.state !== "running") {
+  if (!unlocked || context.state !== "running") {
     appendAudioDebugLog(`Context state after unlock is '${context.state}', retrying unlock once`);
-    await unlockAudioPipeline();
+    unlocked = await unlockAudioPipeline();
     context = state.audioCtx || context;
   }
   if (context.state !== "running") {
+    if (!unlocked || state.audioUnlockPendingGesture) {
+      throw createAudioUnlockPendingError();
+    }
     throw new Error("Audio context is not running");
   }
   return context;
@@ -1175,8 +1349,10 @@ async function unlockAudioPipeline() {
   configureAudioSessionIfSupported();
   if (context.state === "running") {
     state.audioUnlocked = true;
+    state.audioUnlockPendingGesture = false;
+    state.audioUnlockFailures = 0;
     appendAudioDebugLog("AudioContext already running");
-    return;
+    return true;
   }
 
   if (!state.audioUnlockPromise) {
@@ -1185,22 +1361,36 @@ async function unlockAudioPipeline() {
         await resumeAudioContextWithTimeout(context, "primary");
       } catch (primaryError) {
         state.audioUnlockFailures += 1;
+        state.audioUnlockPendingGesture = true;
         appendAudioDebugLog(`Primary resume failed: ${primaryError?.message || "unknown error"}`);
-        context = await recreateAudioContext();
-        configureAudioSessionIfSupported();
-        await resumeAudioContextWithTimeout(context, "recreated");
+        if (state.audioUnlockFailures < AUDIO_UNLOCK_RECREATE_FAILURE_THRESHOLD) {
+          return false;
+        }
+        try {
+          context = await recreateAudioContext();
+          configureAudioSessionIfSupported();
+          await resumeAudioContextWithTimeout(context, "recreated");
+        } catch (recreatedError) {
+          state.audioUnlockFailures += 1;
+          state.audioUnlockPendingGesture = true;
+          appendAudioDebugLog(`Recreated resume failed: ${recreatedError?.message || "unknown error"}`);
+          return false;
+        }
       }
 
       configureAudioSessionIfSupported();
       primeAudioContextTick(context);
       state.audioUnlocked = true;
+      state.audioUnlockPendingGesture = false;
+      state.audioUnlockFailures = 0;
       appendAudioDebugLog(`AudioContext resumed: ${context.state}`);
+      return true;
     })().finally(() => {
       state.audioUnlockPromise = null;
     });
   }
 
-  await state.audioUnlockPromise;
+  return state.audioUnlockPromise;
 }
 
 async function preloadSampleIds(context, sampleIds) {
@@ -1292,12 +1482,12 @@ async function ensureSampleBuffer(context, sampleId) {
   const promise = (async () => {
     const sample = state.sampleById.get(sampleId);
     if (!sample) {
-      throw new Error(`Unknown piano sample '${sampleId}'`);
+      throw new Error(`Unknown sample '${sampleId}'`);
     }
 
-    const response = await fetch(sample.file, { cache: "force-cache" });
+    const response = await fetch(resolveSampleFileUrl(sample), { cache: "no-cache" });
     if (!response.ok) {
-      throw new Error(`Failed to load piano sample '${sampleId}'`);
+      throw new Error(`Failed to load sample '${sampleId}'`);
     }
 
     const encoded = await response.arrayBuffer();
@@ -1316,6 +1506,14 @@ async function ensureSampleBuffer(context, sampleId) {
 
   state.sampleFetchPromises.set(sampleId, promise);
   return promise;
+}
+
+function resolveSampleFileUrl(sample) {
+  const separator = sample.file.includes("?") ? "&" : "?";
+  const version = encodeURIComponent(
+    `${state.audioManifestInstrument || "piano"}-${state.audioAssetVersion || "0"}`,
+  );
+  return `${sample.file}${separator}v=${version}`;
 }
 
 function decodeAudioData(context, encoded) {
@@ -1353,7 +1551,7 @@ function mapTargetHzToSample(targetHz) {
     throw new Error(`Invalid target frequency '${targetHz}'`);
   }
   if (!state.audioManifest || !Array.isArray(state.audioManifest.samples)) {
-    throw new Error("Piano sample manifest is unavailable");
+    throw new Error("Sample manifest is unavailable");
   }
 
   let nearestSample = null;
@@ -1427,7 +1625,9 @@ async function playNotes(notes) {
     const totalMs = notes.length * fullSampleDurationMs + (notes.length - 1) * NOTE_GAP_MS + 120;
     await sleep(totalMs);
   } catch (error) {
-    showGlobalError(error.message || "Failed to play tones");
+    if (!isAudioUnlockPendingError(error)) {
+      showGlobalError(error.message || "Failed to play tones");
+    }
   } finally {
     state.isPlaying = false;
     ui.repeatBtn.disabled = false;
@@ -1509,6 +1709,10 @@ function handleGlobalToneKeydown(event) {
 }
 
 function handleTouchKeyboardPointerDown(event) {
+  if (state.keyboardMode === "full") {
+    return;
+  }
+
   const button = event.target.closest("button[data-degree]");
   if (!button) {
     return;
@@ -1528,6 +1732,180 @@ function handleTouchKeyboardPointerDown(event) {
   void playKeyboardDegree(degree);
 }
 
+function isTouchKeyboardDevice() {
+  return window.matchMedia("(hover: none), (pointer: coarse)").matches;
+}
+
+function openFullKeyboardMode() {
+  if (!isTouchKeyboardDevice() || !ui.fullKeyboardOverlay) {
+    return;
+  }
+  state.keyboardMode = "full";
+  ui.fullKeyboardOverlay.classList.remove("hidden");
+  ui.fullKeyboardOverlay.classList.add("is-open");
+  ui.fullKeyboardOverlay.setAttribute("aria-hidden", "false");
+  document.body.classList.add("keyboard-full-open");
+}
+
+function closeFullKeyboardMode() {
+  if (!ui.fullKeyboardOverlay) {
+    return;
+  }
+  clearDualOctaveExitHold();
+  resetTouchOctaveState();
+  clearFullKeyboardPointerTargets();
+  state.keyboardMode = "compact";
+  ui.fullKeyboardOverlay.classList.remove("is-open");
+  ui.fullKeyboardOverlay.classList.add("hidden");
+  ui.fullKeyboardOverlay.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("keyboard-full-open");
+}
+
+function clearFullKeyboardPointerTargets() {
+  for (const pointerTarget of state.fullKeyboardPointerTargets.values()) {
+    pointerTarget.button.classList.remove("is-pressed");
+  }
+  state.fullKeyboardPointerTargets.clear();
+}
+
+function resetTouchOctaveState() {
+  state.touchOctaveUpActive = false;
+  state.touchOctaveDownActive = false;
+  state.touchOctaveShift = 0;
+  ui.fullKeyboardOctUp?.classList.remove("is-pressed");
+  ui.fullKeyboardOctDown?.classList.remove("is-pressed");
+}
+
+function updateTouchOctaveShift() {
+  if (state.touchOctaveUpActive && state.touchOctaveDownActive) {
+    state.touchOctaveShift = 0;
+    return;
+  }
+  if (state.touchOctaveUpActive) {
+    state.touchOctaveShift = 1;
+    return;
+  }
+  if (state.touchOctaveDownActive) {
+    state.touchOctaveShift = -1;
+    return;
+  }
+  state.touchOctaveShift = 0;
+}
+
+function clearDualOctaveExitHold() {
+  if (state.octaveExitHoldTimer) {
+    window.clearTimeout(state.octaveExitHoldTimer);
+    state.octaveExitHoldTimer = null;
+  }
+}
+
+function maybeStartDualOctaveExitHold() {
+  if (!state.touchOctaveUpActive || !state.touchOctaveDownActive) {
+    clearDualOctaveExitHold();
+    return;
+  }
+  if (state.octaveExitHoldTimer) {
+    return;
+  }
+  state.octaveExitHoldTimer = window.setTimeout(() => {
+    state.octaveExitHoldTimer = null;
+    if (state.touchOctaveUpActive && state.touchOctaveDownActive) {
+      closeFullKeyboardMode();
+    }
+  }, FULL_KEYBOARD_EXIT_HOLD_MS);
+}
+
+function handleFullKeyboardPointerDown(event) {
+  if (state.keyboardMode !== "full") {
+    return;
+  }
+
+  const button = event.target.closest("button");
+  if (!button || !ui.fullKeyboardOverlay?.contains(button)) {
+    return;
+  }
+
+  event.preventDefault();
+  if (button.setPointerCapture && event.pointerId !== undefined) {
+    try {
+      button.setPointerCapture(event.pointerId);
+    } catch {
+      // Ignore capture failures on browsers that reject this call.
+    }
+  }
+
+  const pointerId = event.pointerId;
+  if (pointerId !== undefined && state.fullKeyboardPointerTargets.has(pointerId)) {
+    return;
+  }
+
+  const degreeRaw = button.dataset.fullDegree;
+  if (degreeRaw) {
+    const degree = Number(degreeRaw);
+    if (Number.isInteger(degree) && degree >= 1 && degree <= 7) {
+      button.classList.add("is-pressed");
+      if (pointerId !== undefined) {
+        state.fullKeyboardPointerTargets.set(pointerId, { kind: "degree", button });
+      }
+      void playKeyboardDegree(degree, state.touchOctaveShift);
+    }
+    return;
+  }
+
+  const octaveRaw = button.dataset.octaveShift;
+  if (!octaveRaw) {
+    return;
+  }
+
+  const octaveShift = Number(octaveRaw);
+  if (octaveShift !== 1 && octaveShift !== -1) {
+    return;
+  }
+
+  button.classList.add("is-pressed");
+  if (pointerId !== undefined) {
+    state.fullKeyboardPointerTargets.set(pointerId, { kind: "octave", button, octaveShift });
+  }
+  if (octaveShift === 1) {
+    state.touchOctaveUpActive = true;
+  } else {
+    state.touchOctaveDownActive = true;
+  }
+  updateTouchOctaveShift();
+  maybeStartDualOctaveExitHold();
+}
+
+function handleFullKeyboardPointerUp(event) {
+  if (!state.fullKeyboardPointerTargets.size) {
+    return;
+  }
+
+  const pointerId = event.pointerId;
+  if (pointerId === undefined) {
+    return;
+  }
+
+  const pointerTarget = state.fullKeyboardPointerTargets.get(pointerId);
+  if (!pointerTarget) {
+    return;
+  }
+
+  pointerTarget.button.classList.remove("is-pressed");
+  state.fullKeyboardPointerTargets.delete(pointerId);
+
+  if (pointerTarget.kind !== "octave") {
+    return;
+  }
+
+  if (pointerTarget.octaveShift === 1) {
+    state.touchOctaveUpActive = false;
+  } else if (pointerTarget.octaveShift === -1) {
+    state.touchOctaveDownActive = false;
+  }
+  updateTouchOctaveShift();
+  maybeStartDualOctaveExitHold();
+}
+
 async function playKeyboardDegree(degree, octaveShift = 0) {
   try {
     const keyboardPlan = ensureKeyboardTonePlan();
@@ -1545,7 +1923,9 @@ async function playKeyboardDegree(degree, octaveShift = 0) {
     await ensureSampleBuffer(context, mapping.sampleId);
     scheduleRawSample(context, mapping.sampleId, context.currentTime + 0.001);
   } catch (error) {
-    showGlobalError(error.message || "Failed to play keyboard tone");
+    if (!isAudioUnlockPendingError(error)) {
+      showGlobalError(error.message || "Failed to play keyboard tone");
+    }
   }
 }
 
@@ -1653,10 +2033,25 @@ function resolveKeyboardDegree(event) {
     return Number(match[2]);
   }
 
+  const alternativeMap = {
+    KeyM: 1,
+    Comma: 2,
+    Period: 3,
+    KeyJ: 4,
+    KeyK: 5,
+    KeyL: 6,
+    KeyU: 7,
+  };
+  const mapped = alternativeMap[code];
+  if (mapped) {
+    return mapped;
+  }
+
   return null;
 }
 
 function goHomeView() {
+  closeFullKeyboardMode();
   state.session = null;
   navigateToView("dashboardView");
   renderModuleGrid();
@@ -1678,6 +2073,9 @@ function switchView(viewId) {
 }
 
 function navigateToView(viewId) {
+  if (viewId !== "dashboardView") {
+    closeFullKeyboardMode();
+  }
   switchView(viewId);
   window.history.pushState({ view: viewId }, "");
 }
@@ -1697,6 +2095,8 @@ function handlePopState(event) {
     state.session = null;
     renderModuleGrid();
     renderHistory();
+  } else {
+    closeFullKeyboardMode();
   }
 
   switchView(targetView);

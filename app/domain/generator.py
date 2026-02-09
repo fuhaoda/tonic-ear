@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass
 from itertools import combinations
 
-from app.domain.audio_samples import map_target_frequency
+from app.domain.audio_samples import map_target_frequency, validate_instrument
 from app.domain.music import (
     EQUAL_TEMPERAMENT,
     GENDER_OPTIONS,
@@ -22,6 +22,10 @@ from app.domain.music import (
 
 QUESTION_COUNT = 20
 PITCH_MODULE_LEVELS = ["L1", "L2", "L3", "L4", "L5", "L6"]
+INSTRUMENT_OPTIONS = [
+    {"id": "piano", "label": "Piano"},
+    {"id": "guitar", "label": "Guitar"},
+]
 
 
 @dataclass(frozen=True)
@@ -116,6 +120,7 @@ def get_meta() -> dict:
         "genders": GENDER_OPTIONS,
         "keys": KEY_OPTIONS,
         "temperaments": TEMPERAMENT_OPTIONS,
+        "instruments": INSTRUMENT_OPTIONS,
         "difficulties": get_difficulty_metadata(),
         "modules": [
             {
@@ -131,17 +136,26 @@ def get_meta() -> dict:
             "gender": "male",
             "key": "C",
             "temperament": EQUAL_TEMPERAMENT,
+            "instrument": "piano",
             "showVisualHints": False,
             "questionCount": QUESTION_COUNT,
         },
     }
 
 
-def generate_session(module_id: str, gender: str, key: str, temperament: str) -> dict:
+def generate_session(
+    module_id: str,
+    gender: str,
+    key: str,
+    temperament: str,
+    instrument: str = "piano",
+) -> dict:
     """Generate one training session with 20 questions."""
 
     if module_id not in MODULE_MAP:
         raise ValueError(f"Unknown module '{module_id}'")
+
+    validate_instrument(instrument)
 
     module = MODULE_MAP[module_id]
     effective_level = _resolve_note_pool_level(module)
@@ -155,6 +169,7 @@ def generate_session(module_id: str, gender: str, key: str, temperament: str) ->
             notes_pool=notes_pool,
             do_frequency=do_frequency,
             temperament=temperament,
+            instrument=instrument,
         )
         for index in range(QUESTION_COUNT)
     ]
@@ -170,6 +185,7 @@ def generate_session(module_id: str, gender: str, key: str, temperament: str) ->
             "gender": gender,
             "key": key,
             "temperament": temperament,
+            "instrument": instrument,
             "questionCount": QUESTION_COUNT,
             "doFrequency": round(do_frequency, 4),
         },
@@ -193,24 +209,41 @@ def _generate_question(
     notes_pool: list,
     do_frequency: float,
     temperament: str,
+    instrument: str,
 ) -> dict:
     if module.question_type == "compare_two":
-        return _generate_compare_two(module, question_number, notes_pool, do_frequency, temperament)
+        return _generate_compare_two(module, question_number, notes_pool, do_frequency, temperament, instrument)
     if module.question_type == "sort_three":
-        return _generate_sort(module, question_number, notes_pool, do_frequency, temperament, note_count=3)
+        return _generate_sort(
+            module,
+            question_number,
+            notes_pool,
+            do_frequency,
+            temperament,
+            instrument,
+            note_count=3,
+        )
     if module.question_type == "sort_four":
-        return _generate_sort(module, question_number, notes_pool, do_frequency, temperament, note_count=4)
+        return _generate_sort(
+            module,
+            question_number,
+            notes_pool,
+            do_frequency,
+            temperament,
+            instrument,
+            note_count=4,
+        )
     if module.question_type == "interval_scale":
-        return _generate_interval(module, question_number, notes_pool, do_frequency, temperament)
+        return _generate_interval(module, question_number, notes_pool, do_frequency, temperament, instrument)
     if module.question_type == "single_note":
-        return _generate_single_note(module, question_number, notes_pool, do_frequency, temperament)
+        return _generate_single_note(module, question_number, notes_pool, do_frequency, temperament, instrument)
     raise ValueError(f"Unsupported question type '{module.question_type}'")
 
 
-def _generate_compare_two(module, question_number, notes_pool, do_frequency, temperament) -> dict:
+def _generate_compare_two(module, question_number, notes_pool, do_frequency, temperament, instrument) -> dict:
     interval_step = _interval_constraint_for_level(module.level)
     picked = _pick_compare_notes(notes_pool, interval_step)
-    note_payloads = _build_note_payloads(picked, do_frequency, temperament)
+    note_payloads = _build_note_payloads(picked, do_frequency, temperament, instrument)
 
     correct_answer = "first_higher" if picked[0].semitone > picked[1].semitone else "second_higher"
 
@@ -228,10 +261,18 @@ def _generate_compare_two(module, question_number, notes_pool, do_frequency, tem
     }
 
 
-def _generate_sort(module, question_number, notes_pool, do_frequency, temperament, note_count: int) -> dict:
+def _generate_sort(
+    module,
+    question_number,
+    notes_pool,
+    do_frequency,
+    temperament,
+    instrument,
+    note_count: int,
+) -> dict:
     interval_step = _interval_constraint_for_level(module.level)
     picked = _pick_sort_notes(notes_pool, note_count, interval_step)
-    note_payloads = _build_note_payloads(picked, do_frequency, temperament)
+    note_payloads = _build_note_payloads(picked, do_frequency, temperament, instrument)
     sorted_indices = sorted(range(note_count), key=lambda idx: picked[idx].semitone)
 
     return {
@@ -248,9 +289,9 @@ def _generate_sort(module, question_number, notes_pool, do_frequency, temperamen
     }
 
 
-def _generate_interval(module, question_number, notes_pool, do_frequency, temperament) -> dict:
+def _generate_interval(module, question_number, notes_pool, do_frequency, temperament, instrument) -> dict:
     picked = random.sample(notes_pool, 2)
-    note_payloads = _build_note_payloads(picked, do_frequency, temperament)
+    note_payloads = _build_note_payloads(picked, do_frequency, temperament, instrument)
     distance = abs(picked[0].degree - picked[1].degree)
 
     possible_distances = sorted(
@@ -272,9 +313,9 @@ def _generate_interval(module, question_number, notes_pool, do_frequency, temper
     }
 
 
-def _generate_single_note(module, question_number, notes_pool, do_frequency, temperament) -> dict:
+def _generate_single_note(module, question_number, notes_pool, do_frequency, temperament, instrument) -> dict:
     picked = random.choice(notes_pool)
-    note_payload = _build_note_payloads([picked], do_frequency, temperament)[0]
+    note_payload = _build_note_payloads([picked], do_frequency, temperament, instrument)[0]
 
     correct_answer = {
         "degree": str(picked.degree),
@@ -376,12 +417,17 @@ def validate_temperament(temperament: str) -> None:
         raise ValueError(f"Unknown temperament '{temperament}'")
 
 
-def _build_note_payloads(notes_pool: list, do_frequency: float, temperament: str) -> list[dict]:
+def _build_note_payloads(
+    notes_pool: list,
+    do_frequency: float,
+    temperament: str,
+    instrument: str,
+) -> list[dict]:
     payloads: list[dict] = []
     for note in notes_pool:
         payload = build_note_payload(note, do_frequency, temperament)
         frequency = note_frequency(note.semitone, do_frequency, temperament)
-        mapping = map_target_frequency(frequency)
+        mapping = map_target_frequency(frequency, instrument=instrument)
         payload["sampleId"] = mapping.sample_id
         payload["midi"] = mapping.midi
         payloads.append(payload)

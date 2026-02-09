@@ -9,6 +9,11 @@ def test_meta_contains_expected_module_count_and_structure():
     assert "modules" in meta
     assert len(meta["modules"]) == 25
     assert meta["defaults"]["showVisualHints"] is False
+    assert meta["defaults"]["instrument"] == "piano"
+    assert meta["instruments"] == [
+        {"id": "piano", "label": "Piano"},
+        {"id": "guitar", "label": "Guitar"},
+    ]
 
     module_ids = {module["id"] for module in meta["modules"]}
     assert "MI-L4" not in module_ids
@@ -151,3 +156,15 @@ def test_all_generated_notes_include_sample_id_and_midi():
             assert isinstance(note["sampleId"], str)
             assert note["sampleId"].startswith("m")
             assert isinstance(note["midi"], int)
+
+
+def test_session_settings_include_requested_instrument():
+    random.seed(53)
+    session = generate_session(
+        module_id="M2-L3",
+        gender="male",
+        key="G",
+        temperament="equal_temperament",
+        instrument="guitar",
+    )
+    assert session["settings"]["instrument"] == "guitar"
