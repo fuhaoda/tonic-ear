@@ -8,6 +8,7 @@ const MAX_CENTS_ERROR = 10;
 const MAX_POLYPHONY = 5;
 const SAMPLE_PRELOAD_CONCURRENCY = 4;
 const AUDIO_DEBUG_LOG_LIMIT = 80;
+const AUDIO_UNLOCK_TIMEOUT_MS = 1500;
 
 const NATURAL_DEGREE_TO_SEMITONE = {
   1: 0,
@@ -44,6 +45,7 @@ const state = {
   keyboardTonePlan: null,
   activeVoices: [],
   audioDebugLines: [],
+  audioUnlockFailures: 0,
 };
 
 const ui = {};
@@ -988,7 +990,9 @@ async function runAudioDebugUnlock() {
     setAudioDebugStatus("Unlocking audio...");
     await unlockAudioPipeline();
     const context = getOrCreateAudioContext();
-    setAudioDebugStatus(`Unlock ok | Context: ${context.state} | Primed: ${state.audioUnlocked ? "yes" : "no"}`);
+    setAudioDebugStatus(
+      `Unlock ok | Context: ${context.state} | Primed: ${state.audioUnlocked ? "yes" : "no"} | Failures: ${state.audioUnlockFailures}`,
+    );
     appendAudioDebugLog(`Unlock succeeded; context state is '${context.state}'`);
   } catch (error) {
     const message = error?.message || "Unlock failed";
@@ -1046,6 +1050,50 @@ function configureAudioSessionIfSupported() {
   } catch (error) {
     appendAudioDebugLog(`navigator.audioSession failed: ${error?.message || "unknown error"}`);
   }
+}
+
+async function resumeAudioContextWithTimeout(context, label = "primary") {
+  if (context.state === "running") {
+    return;
+  }
+
+  const resumeResult = context.resume();
+  if (resumeResult && typeof resumeResult.then === "function") {
+    await Promise.race([
+      resumeResult,
+      new Promise((_, reject) => {
+        window.setTimeout(() => {
+          reject(new Error(`AudioContext resume timed out (${label})`));
+        }, AUDIO_UNLOCK_TIMEOUT_MS);
+      }),
+    ]);
+    return;
+  }
+
+  // Legacy path: give Safari a short window to transition state.
+  await new Promise((resolve) => window.setTimeout(resolve, 40));
+  if (context.state !== "running") {
+    throw new Error(`AudioContext resume did not enter running state (${label})`);
+  }
+}
+
+async function recreateAudioContext() {
+  const previous = state.audioCtx;
+  state.audioCtx = null;
+  state.audioUnlocked = false;
+
+  if (previous && previous.state !== "closed") {
+    try {
+      await previous.close();
+      appendAudioDebugLog("Previous AudioContext closed");
+    } catch (error) {
+      appendAudioDebugLog(`AudioContext close failed: ${error?.message || "unknown error"}`);
+    }
+  }
+
+  const fresh = getOrCreateAudioContext();
+  appendAudioDebugLog("Created fresh AudioContext");
+  return fresh;
 }
 
 function getOrCreateAudioContext() {
@@ -1107,7 +1155,7 @@ function removeAudioUnlockListeners() {
 }
 
 async function unlockAudioPipeline() {
-  const context = getOrCreateAudioContext();
+  let context = getOrCreateAudioContext();
   configureAudioSessionIfSupported();
   if (context.state === "running") {
     state.audioUnlocked = true;
@@ -1116,17 +1164,24 @@ async function unlockAudioPipeline() {
   }
 
   if (!state.audioUnlockPromise) {
-    state.audioUnlockPromise = context
-      .resume()
-      .then(() => {
+    state.audioUnlockPromise = (async () => {
+      try {
+        await resumeAudioContextWithTimeout(context, "primary");
+      } catch (primaryError) {
+        state.audioUnlockFailures += 1;
+        appendAudioDebugLog(`Primary resume failed: ${primaryError?.message || "unknown error"}`);
+        context = await recreateAudioContext();
         configureAudioSessionIfSupported();
-        primeAudioContextTick(context);
-        state.audioUnlocked = true;
-        appendAudioDebugLog(`AudioContext resumed: ${context.state}`);
-      })
-      .finally(() => {
-        state.audioUnlockPromise = null;
-      });
+        await resumeAudioContextWithTimeout(context, "recreated");
+      }
+
+      configureAudioSessionIfSupported();
+      primeAudioContextTick(context);
+      state.audioUnlocked = true;
+      appendAudioDebugLog(`AudioContext resumed: ${context.state}`);
+    })().finally(() => {
+      state.audioUnlockPromise = null;
+    });
   }
 
   await state.audioUnlockPromise;
