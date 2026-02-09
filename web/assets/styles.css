@@ -87,7 +87,7 @@ h2 {
 }
 
 .app-shell {
-  max-width: 1080px;
+  max-width: 1240px;
   margin: 0 auto;
   padding: 0.7rem 1rem 2.2rem;
   display: grid;
@@ -131,7 +131,7 @@ h2 {
   margin-top: 0.85rem;
   display: grid;
   gap: 0.8rem;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   align-items: start;
 }
 
@@ -184,8 +184,9 @@ select {
 .module-grid {
   margin-top: 0.8rem;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
   gap: 0.75rem;
+  align-items: stretch;
 }
 
 .module-card {
@@ -195,6 +196,8 @@ select {
   background: linear-gradient(145deg, #ffffff, #f7fbfc);
   display: grid;
   gap: 0.55rem;
+  min-width: 0;
+  align-content: start;
 }
 
 .module-card h3 {
@@ -497,7 +500,13 @@ select {
 
 @media (min-width: 1024px) {
   .settings-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1200px) {
+  .module-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 

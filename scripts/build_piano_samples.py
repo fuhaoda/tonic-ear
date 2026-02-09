@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download and build compact piano samples for browser playback."""
+"""Download and rebuild aligned piano samples for fast browser playback."""
 
 from __future__ import annotations
 
@@ -7,130 +7,79 @@ import argparse
 from array import array
 from math import sqrt
 import json
+from pathlib import Path
 import shutil
 from statistics import median
 import subprocess
-from pathlib import Path
 import sys
+import tempfile
+from urllib.parse import quote
 from urllib.request import urlretrieve
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.domain.audio_samples import build_sample_specs, get_unique_target_frequencies, worst_mapping_error
+from app.domain.audio_samples import (
+    SAMPLE_MAX_HZ,
+    SAMPLE_MIN_HZ,
+    build_sample_specs,
+    get_unique_equal_temperament_targets,
+    worst_mapping_error,
+)
 
 SOURCE_BASE_URL = "https://theremin.music.uiowa.edu/sound%20files/MIS/Piano_Other/piano"
-LOUDNESS_I_LUFS = -20.0
-LOUDNESS_LRA = 7.0
-LOUDNESS_TRUE_PEAK_DBTP = -2.0
-PRE_ATTACK_MS = 5
-ONSET_THRESHOLD_RATIO = 0.08
-ONSET_THRESHOLD_FLOOR = 0.003
-ONSET_MIN_STREAK = 96
-FADE_IN_SEC = 0.003
-FADE_OUT_SEC = 0.08
-GAIN_MEASURE_START_SEC = 0.03
-GAIN_MEASURE_WINDOW_SEC = 0.45
-GAIN_CLAMP_MIN = 0.65
-GAIN_CLAMP_MAX = 1.35
+
+SILENCE_THRESHOLD_DB = -50
+START_SILENCE_KEEP_SEC = 0.003
+
+RMS_WINDOW_SEC = 0.300
+TARGET_PEAK_LINEAR = 0.90
+GAIN_CLAMP_MIN = 0.60
+GAIN_CLAMP_MAX = 3.00
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--output-dir",
-        default="web/assets/audio/piano",
-        help="Directory for generated m4a files and manifest.json",
-    )
-    parser.add_argument(
-        "--cache-dir",
-        default=".cache/piano_mis",
-        help="Directory used to cache downloaded source aiff files",
-    )
-    parser.add_argument("--duration", type=float, default=2.0, help="Output duration in seconds")
+    parser.add_argument("--output-dir", default="web/assets/audio/piano", help="Output directory")
+    parser.add_argument("--cache-dir", default=".cache/piano_mis_ff", help="Source cache directory")
+    parser.add_argument("--duration", type=float, default=1.0, help="Output duration in seconds")
     parser.add_argument("--sample-rate", type=int, default=44100, help="Output sample rate")
-    parser.add_argument("--bitrate", default="128k", help="AAC bitrate (e.g. 96k, 128k)")
+    parser.add_argument("--bitrate", default="160k", help="AAC bitrate, for example 128k/160k")
+    parser.add_argument("--target-mb", type=float, default=10.0, help="Soft package-size target")
+    parser.add_argument("--max-total-mb", type=float, default=20.0, help="Hard package-size cap")
+    parser.add_argument("--clean", action="store_true", help="Remove output dir before build")
     parser.add_argument(
-        "--max-total-mb",
-        type=float,
-        default=20.0,
-        help="Hard cap for total generated audio size in megabytes",
+        "--refresh-sources",
+        action="store_true",
+        help="Force re-download of all source files before processing",
     )
-    parser.add_argument(
-        "--target-mb",
-        type=float,
-        default=10.0,
-        help="Soft target size in megabytes (warning only)",
-    )
-    parser.add_argument("--clean", action="store_true", help="Remove existing output directory before build")
     return parser.parse_args()
 
 
 def require_ffmpeg() -> None:
     if shutil.which("ffmpeg") is None:
-        raise SystemExit("ffmpeg is required but not found in PATH.")
+        raise SystemExit("ffmpeg is required but not found in PATH")
 
 
-def download_sources(cache_dir: Path) -> list[Path]:
+def source_url_for_filename(filename: str) -> str:
+    return f"{SOURCE_BASE_URL}/{quote(filename)}"
+
+
+def download_sources(cache_dir: Path, refresh_sources: bool) -> None:
     cache_dir.mkdir(parents=True, exist_ok=True)
-    source_paths: list[Path] = []
 
     for spec in build_sample_specs():
         source_path = cache_dir / spec.source_filename
-        if not source_path.exists():
-            source_url = f"{SOURCE_BASE_URL}/{spec.source_filename}"
-            print(f"Downloading {source_url}")
-            urlretrieve(source_url, source_path)
-        source_paths.append(source_path)
-    return source_paths
+        if refresh_sources and source_path.exists():
+            source_path.unlink()
 
+        if source_path.exists():
+            continue
 
-def detect_onset_seconds(input_path: Path, sample_rate: int) -> float:
-    ffmpeg_cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        str(input_path),
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        str(sample_rate),
-        "-f",
-        "f32le",
-        "-",
-    ]
-    proc = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-    samples = array("f")
-    samples.frombytes(proc.stdout)
-
-    if not samples:
-        return 0.0
-
-    peak_abs = 0.0
-    for value in samples:
-        abs_value = abs(value)
-        if abs_value > peak_abs:
-            peak_abs = abs_value
-
-    if peak_abs <= 0.0:
-        return 0.0
-
-    threshold = max(peak_abs * ONSET_THRESHOLD_RATIO, ONSET_THRESHOLD_FLOOR)
-    streak = 0
-    for index, value in enumerate(samples):
-        if abs(value) >= threshold:
-            streak += 1
-            if streak >= ONSET_MIN_STREAK:
-                onset_index = index - ONSET_MIN_STREAK + 1
-                return onset_index / sample_rate
-        else:
-            streak = 0
-
-    return 0.0
+        source_url = source_url_for_filename(spec.source_filename)
+        print(f"Downloading {source_url}")
+        urlretrieve(source_url, source_path)
 
 
 def decode_mono_float_samples(input_path: Path, sample_rate: int) -> array:
@@ -156,57 +105,27 @@ def decode_mono_float_samples(input_path: Path, sample_rate: int) -> array:
     return samples
 
 
-def measure_output_rms(input_path: Path, sample_rate: int) -> float:
-    samples = decode_mono_float_samples(input_path, sample_rate=sample_rate)
-    if not samples:
-        return 0.0
-
-    start_index = int(round(GAIN_MEASURE_START_SEC * sample_rate))
-    end_index = min(len(samples), start_index + int(round(GAIN_MEASURE_WINDOW_SEC * sample_rate)))
-    if end_index <= start_index:
-        start_index = 0
-        end_index = len(samples)
-
-    window = samples[start_index:end_index]
-    if not window:
-        return 0.0
-
-    energy = 0.0
-    for value in window:
-        energy += value * value
-    return sqrt(energy / len(window))
-
-
-def run_ffmpeg(
+def render_trimmed_wav(
     input_path: Path,
-    output_path: Path,
+    temp_wav_path: Path,
     duration: float,
     sample_rate: int,
-    bitrate: str,
-    trim_start_sec: float,
 ) -> None:
-    fade_out_start = max(duration - FADE_OUT_SEC, 0.01)
     filter_chain = ",".join(
         [
-            "aformat=channel_layouts=mono",
-            f"aresample={sample_rate}",
-            f"atrim=start={trim_start_sec:.6f}",
-            "asetpts=PTS-STARTPTS",
             (
-                "loudnorm="
-                f"I={LOUDNESS_I_LUFS:.1f}:"
-                f"LRA={LOUDNESS_LRA:.1f}:"
-                f"TP={LOUDNESS_TRUE_PEAK_DBTP:.1f}:"
-                "linear=true:"
-                "dual_mono=true"
+                "silenceremove="
+                "start_periods=1:"
+                f"start_threshold={SILENCE_THRESHOLD_DB}dB:"
+                f"start_silence={START_SILENCE_KEEP_SEC:.3f}"
             ),
-            f"adelay={PRE_ATTACK_MS}:all=1",
-            f"apad=pad_dur={duration:.3f}",
-            f"atrim=start=0:end={duration:.3f}",
-            f"afade=t=in:st=0:d={FADE_IN_SEC:.3f}",
-            f"afade=t=out:st={fade_out_start:.3f}:d={FADE_OUT_SEC:.3f}",
+            "asetpts=PTS-STARTPTS",
+            f"atrim=end={duration:.6f}",
+            f"apad=pad_dur={duration:.6f}",
+            f"atrim=end={duration:.6f}",
         ]
     )
+
     ffmpeg_cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -222,6 +141,44 @@ def run_ffmpeg(
         str(sample_rate),
         "-af",
         filter_chain,
+        "-c:a",
+        "pcm_f32le",
+        str(temp_wav_path),
+    ]
+    subprocess.run(ffmpeg_cmd, check=True)
+
+
+def measure_peak_and_window_rms(input_path: Path, sample_rate: int) -> tuple[float, float]:
+    samples = decode_mono_float_samples(input_path, sample_rate=sample_rate)
+    if not samples:
+        return 0.0, 0.0
+
+    peak = max(abs(value) for value in samples)
+
+    end_index = min(len(samples), int(round(RMS_WINDOW_SEC * sample_rate)))
+    window = samples[:end_index] if end_index > 0 else samples
+    if not window:
+        return peak, 0.0
+
+    energy = 0.0
+    for value in window:
+        energy += value * value
+
+    rms = sqrt(energy / len(window))
+    return peak, rms
+
+
+def encode_final_sample(temp_wav_path: Path, output_path: Path, bitrate: str, gain: float) -> None:
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(temp_wav_path),
+        "-af",
+        f"volume={gain:.8f}",
         "-c:a",
         "aac",
         "-b:a",
@@ -239,27 +196,49 @@ def build_audio_assets(
     duration: float,
     sample_rate: int,
     bitrate: str,
-) -> tuple[dict[str, float], dict[str, float]]:
+    refresh_sources: bool,
+) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    download_sources(cache_dir)
-    onset_map: dict[str, float] = {}
-    rms_map: dict[str, float] = {}
+    download_sources(cache_dir, refresh_sources=refresh_sources)
 
-    for spec in build_sample_specs():
-        source_path = cache_dir / spec.source_filename
-        output_path = output_dir / spec.output_filename
-        onset_sec = detect_onset_seconds(source_path, sample_rate=sample_rate)
-        onset_map[spec.id] = onset_sec
-        run_ffmpeg(
-            source_path,
-            output_path,
-            duration=duration,
-            sample_rate=sample_rate,
-            bitrate=bitrate,
-            trim_start_sec=onset_sec,
-        )
-        rms_map[spec.id] = measure_output_rms(output_path, sample_rate=sample_rate)
-    return onset_map, rms_map
+    peak_map: dict[str, float] = {}
+    rms_map: dict[str, float] = {}
+    gain_map: dict[str, float] = {}
+
+    with tempfile.TemporaryDirectory(prefix="tonic_ear_samples_") as temp_dir_str:
+        temp_dir = Path(temp_dir_str)
+        temp_wavs: dict[str, Path] = {}
+
+        for spec in build_sample_specs():
+            source_path = cache_dir / spec.source_filename
+            temp_wav_path = temp_dir / f"{spec.id}.wav"
+
+            render_trimmed_wav(
+                source_path,
+                temp_wav_path,
+                duration=duration,
+                sample_rate=sample_rate,
+            )
+
+            peak, rms = measure_peak_and_window_rms(temp_wav_path, sample_rate=sample_rate)
+            peak_map[spec.id] = peak
+            rms_map[spec.id] = rms
+            temp_wavs[spec.id] = temp_wav_path
+
+        for spec in build_sample_specs():
+            peak = peak_map.get(spec.id, 0.0)
+            if peak <= 0:
+                gain = 1.0
+            else:
+                gain = TARGET_PEAK_LINEAR / peak
+
+            gain = max(GAIN_CLAMP_MIN, min(GAIN_CLAMP_MAX, gain))
+            gain_map[spec.id] = gain
+
+            output_path = output_dir / spec.output_filename
+            encode_final_sample(temp_wavs[spec.id], output_path, bitrate=bitrate, gain=gain)
+
+    return peak_map, rms_map, gain_map
 
 
 def write_manifest(
@@ -267,84 +246,66 @@ def write_manifest(
     duration: float,
     sample_rate: int,
     bitrate: str,
-    onset_map: dict[str, float],
+    peak_map: dict[str, float],
     rms_map: dict[str, float],
+    gain_map: dict[str, float],
 ) -> dict:
     sample_specs = build_sample_specs()
-    targets = get_unique_target_frequencies()
-    max_error_cents, worst = worst_mapping_error(targets=targets, sample_specs=sample_specs)
-    onset_values = list(onset_map.values())
-    onset_min_ms = int(round(min(onset_values) * 1000)) if onset_values else 0
-    onset_max_ms = int(round(max(onset_values) * 1000)) if onset_values else 0
-    rms_values = [value for value in rms_map.values() if value > 0]
-    target_rms = median(rms_values) if rms_values else 0.1
+    equal_targets = get_unique_equal_temperament_targets()
+    max_error_cents, worst = worst_mapping_error(equal_targets)
 
-    gain_map: dict[str, float] = {}
-    for spec in sample_specs:
-        rms = rms_map.get(spec.id, target_rms)
-        if rms <= 0:
-            gain = 1.0
-        else:
-            gain = target_rms / rms
-        gain = max(GAIN_CLAMP_MIN, min(GAIN_CLAMP_MAX, gain))
-        gain_map[spec.id] = gain
+    peak_values = [value for value in peak_map.values() if value > 0]
+    rms_values = [value for value in rms_map.values() if value > 0]
+    gain_values = [value for value in gain_map.values() if value > 0]
 
     manifest = {
-        "version": 1,
-        "source": "University of Iowa MIS Piano (mf)",
+        "version": 4,
+        "source": "University of Iowa MIS Piano (ff)",
         "sourceUrl": SOURCE_BASE_URL,
         "durationMs": int(round(duration * 1000)),
         "sampleRate": sample_rate,
         "codec": "aac",
         "bitrate": bitrate,
-        "normalization": {
-            "type": "loudnorm",
-            "integratedLufs": LOUDNESS_I_LUFS,
-            "lra": LOUDNESS_LRA,
-            "truePeakDbtp": LOUDNESS_TRUE_PEAK_DBTP,
+        "sampleHzRange": [SAMPLE_MIN_HZ, SAMPLE_MAX_HZ],
+        "alignment": {
+            "method": "silenceremove_start",
+            "startThresholdDb": SILENCE_THRESHOLD_DB,
+            "startSilenceKeepMs": int(round(START_SILENCE_KEEP_SEC * 1000)),
         },
-        "preprocess": {
-            "onsetDetection": {
-                "thresholdRatio": ONSET_THRESHOLD_RATIO,
-                "thresholdFloor": ONSET_THRESHOLD_FLOOR,
-                "minStreakSamples": ONSET_MIN_STREAK,
-            },
-            "trimStartMsRangeBeforePadding": [onset_min_ms, onset_max_ms],
-            "preAttackMs": PRE_ATTACK_MS,
-            "fadeInMs": int(round(FADE_IN_SEC * 1000)),
-            "fadeOutMs": int(round(FADE_OUT_SEC * 1000)),
-            "gainCompensation": {
-                "windowStartMs": int(round(GAIN_MEASURE_START_SEC * 1000)),
-                "windowMs": int(round(GAIN_MEASURE_WINDOW_SEC * 1000)),
-                "targetRms": round(target_rms, 8),
-                "gainClamp": [GAIN_CLAMP_MIN, GAIN_CLAMP_MAX],
-            },
+        "normalization": {
+            "method": "peak_normalize",
+            "targetPeakLinear": TARGET_PEAK_LINEAR,
+            "gainClamp": [GAIN_CLAMP_MIN, GAIN_CLAMP_MAX],
+            "gainRange": [round(min(gain_values), 6), round(max(gain_values), 6)] if gain_values else [1.0, 1.0],
+            "peakRange": [round(min(peak_values), 6), round(max(peak_values), 6)] if peak_values else [0.0, 0.0],
+            "windowRmsMs": int(round(RMS_WINDOW_SEC * 1000)),
+            "windowRmsRange": [round(min(rms_values), 8), round(max(rms_values), 8)] if rms_values else [0.0, 0.0],
         },
         "sampleCount": len(sample_specs),
-        "targetFrequencyCount": len(targets),
+        "targetFrequencyCount": len(equal_targets),
         "maxMappingErrorCents": round(max_error_cents, 6),
         "worstMapping": {
             "targetHz": round(worst.target_hz, 6),
             "sampleId": worst.sample_id,
+            "midi": worst.midi,
             "sampleHz": round(worst.sample_hz, 6),
-            "playbackRate": round(worst.playback_rate, 8),
             "centsError": round(worst.cents_error, 6),
         },
         "samples": [
             {
                 "id": spec.id,
-                "semitoneOffset": spec.semitone_offset,
+                "midi": spec.midi,
                 "note": spec.note,
                 "hz": round(spec.hz, 6),
-                "gain": round(gain_map[spec.id], 6),
+                "durationMs": int(round(duration * 1000)),
+                "gainApplied": round(gain_map.get(spec.id, 1.0), 6),
                 "file": f"/assets/audio/piano/{spec.output_filename}",
             }
             for spec in sample_specs
         ],
     }
 
-    manifest_path = output_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
 
 
@@ -355,13 +316,13 @@ def enforce_size_budget(output_dir: Path, target_mb: float, max_total_mb: float)
 
     if total_mb > max_total_mb:
         raise SystemExit(
-            f"Audio package is {total_mb:.2f}MB which exceeds hard cap {max_total_mb:.2f}MB.",
+            f"Audio package is {total_mb:.2f}MB which exceeds hard cap {max_total_mb:.2f}MB",
         )
 
     if total_mb > target_mb:
         print(
             f"WARNING: audio package is {total_mb:.2f}MB, above target {target_mb:.2f}MB "
-            f"but within hard cap {max_total_mb:.2f}MB.",
+            f"but within hard cap {max_total_mb:.2f}MB",
         )
 
     return total_bytes, total_mb
@@ -377,21 +338,25 @@ def main() -> None:
     if args.clean and output_dir.exists():
         shutil.rmtree(output_dir)
 
-    onset_map, rms_map = build_audio_assets(
+    peak_map, rms_map, gain_map = build_audio_assets(
         output_dir=output_dir,
         cache_dir=cache_dir,
         duration=args.duration,
         sample_rate=args.sample_rate,
         bitrate=args.bitrate,
+        refresh_sources=args.refresh_sources,
     )
+
     manifest = write_manifest(
         output_dir=output_dir,
         duration=args.duration,
         sample_rate=args.sample_rate,
         bitrate=args.bitrate,
-        onset_map=onset_map,
+        peak_map=peak_map,
         rms_map=rms_map,
+        gain_map=gain_map,
     )
+
     total_bytes, total_mb = enforce_size_budget(
         output_dir=output_dir,
         target_mb=args.target_mb,
@@ -400,9 +365,9 @@ def main() -> None:
 
     print(
         "Built piano samples:",
-        f"{manifest['sampleCount']} files, {manifest['targetFrequencyCount']} target frequencies, "
-        f"max mapping error {manifest['maxMappingErrorCents']:.6f} cents, total {total_mb:.2f}MB "
-        f"({total_bytes} bytes).",
+        f"{manifest['sampleCount']} files in {manifest['sampleHzRange'][0]:.1f}-{manifest['sampleHzRange'][1]:.1f}Hz, "
+        f"{manifest['targetFrequencyCount']} equal targets, max mapping error {manifest['maxMappingErrorCents']:.6f} cents, "
+        f"total {total_mb:.2f}MB ({total_bytes} bytes).",
     )
 
 

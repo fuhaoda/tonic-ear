@@ -2,14 +2,7 @@ import math
 
 import pytest
 
-from app.domain.music import (
-    EQUAL_TEMPERAMENT,
-    JUST_INTONATION,
-    JUST_INTONATION_RATIOS,
-    calculate_do_frequency,
-    get_note_pool,
-    note_frequency,
-)
+from app.domain.music import EQUAL_TEMPERAMENT, calculate_do_frequency, get_note_pool, note_frequency
 
 
 def test_calculate_do_frequency_gender_base_values():
@@ -29,11 +22,9 @@ def test_equal_temperament_frequency_formula():
     assert actual == pytest.approx(expected)
 
 
-def test_just_intonation_frequency_formula():
-    do_frequency = 200.0
-    actual = note_frequency(7, do_frequency, JUST_INTONATION)
-    expected = do_frequency * JUST_INTONATION_RATIOS[7]
-    assert actual == pytest.approx(expected)
+def test_unsupported_temperament_rejected():
+    with pytest.raises(ValueError, match="Unsupported temperament"):
+        note_frequency(7, 200.0, "just_intonation")
 
 
 def test_note_pools_match_expected_sizes():

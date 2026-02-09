@@ -1,36 +1,11 @@
 const API_BASE = "/api/v1";
 const PIANO_MANIFEST_PATH = "/assets/audio/piano/manifest.json";
-const NOTE_DURATION_SHORT_MS = 900;
-const NOTE_DURATION_NORMAL_MS = 1300;
-const NOTE_DURATION_FULL_MS = 2000;
+
 const NOTE_GAP_MS = 250;
-const SETTINGS_VERSION = 3;
-const HELD_TONE_GAIN = 0.65;
-const MAX_CENTS_ERROR = 20;
-const ENABLE_OSCILLATOR_FALLBACK = true;
-const HELD_TONE_ATTACK_SEC = 0.003;
-const HELD_TONE_RELEASE_SEC = 0.08;
-const MIN_HELD_TONE_MS = 300;
-const HELD_TONE_START_DELAY_MS = MIN_HELD_TONE_MS;
-const TONE_LENGTH_OPTIONS = [
-  { id: "short", label: "Short (900ms)", durationMs: NOTE_DURATION_SHORT_MS },
-  { id: "normal", label: "Normal (1300ms)", durationMs: NOTE_DURATION_NORMAL_MS },
-  { id: "full", label: "Full (2000ms)", durationMs: NOTE_DURATION_FULL_MS },
-];
-const JUST_INTONATION_RATIOS = [
-  1 / 1,
-  16 / 15,
-  9 / 8,
-  6 / 5,
-  5 / 4,
-  4 / 3,
-  45 / 32,
-  3 / 2,
-  8 / 5,
-  5 / 3,
-  9 / 5,
-  15 / 8,
-];
+const SETTINGS_VERSION = 4;
+const MAX_CENTS_ERROR = 10;
+const MAX_POLYPHONY = 5;
+
 const NATURAL_DEGREE_TO_SEMITONE = {
   1: 0,
   2: 2,
@@ -56,15 +31,16 @@ const state = {
   selectedAccidental: "natural",
   settings: null,
   audioCtx: null,
+  audioUnlocked: false,
+  audioUnlockPromise: null,
   isPlaying: false,
-  heldTones: new Map(),
   audioManifest: null,
   sampleById: new Map(),
   sampleBufferCache: new Map(),
+  sampleFetchPromises: new Map(),
   sampleLoadPromise: null,
   keyboardTonePlan: null,
-  activeTonePresses: new Set(),
-  heldStartTimerByToneId: new Map(),
+  activeVoices: [],
 };
 
 const ui = {};
@@ -85,7 +61,7 @@ async function init() {
     switchView("dashboardView");
     window.history.replaceState({ view: "dashboardView" }, "");
     window.addEventListener("popstate", handlePopState);
-    warmAudioForCurrentSettings();
+    primeAudioPipeline();
   } catch (error) {
     showGlobalError(error.message || "Failed to initialize app");
   }
@@ -101,7 +77,6 @@ function cacheElements() {
   ui.genderSelect = document.getElementById("genderSelect");
   ui.keySelect = document.getElementById("keySelect");
   ui.temperamentSelect = document.getElementById("temperamentSelect");
-  ui.toneLengthSelect = document.getElementById("toneLengthSelect");
   ui.showVisualHints = document.getElementById("showVisualHints");
   ui.quizShowVisualHints = document.getElementById("quizShowVisualHints");
 
@@ -143,9 +118,6 @@ function bindStaticEvents() {
   ui.genderSelect.addEventListener("change", onSettingsChange);
   ui.keySelect.addEventListener("change", onSettingsChange);
   ui.temperamentSelect.addEventListener("change", onSettingsChange);
-  if (ui.toneLengthSelect) {
-    ui.toneLengthSelect.addEventListener("change", onSettingsChange);
-  }
 
   ui.showVisualHints.addEventListener("change", () => {
     setVisualHints(ui.showVisualHints.checked);
@@ -159,7 +131,7 @@ function bindStaticEvents() {
   });
 
   ui.repeatBtn.addEventListener("click", () => {
-    void playCurrentQuestion({ mode: "repeat" });
+    void playCurrentQuestion();
   });
 
   ui.showAnswerBtn.addEventListener("click", () => {
@@ -171,20 +143,10 @@ function bindStaticEvents() {
   });
 
   window.addEventListener("keydown", handleGlobalToneKeydown);
-  window.addEventListener("keyup", handleGlobalToneKeyup);
-  window.addEventListener("blur", stopAllHeldTones);
   window.addEventListener("pointerdown", warmAudioPipelineOnce, { once: true, capture: true });
   window.addEventListener("keydown", warmAudioPipelineOnce, { once: true, capture: true });
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) {
-      stopAllHeldTones();
-    }
-  });
 
   ui.touchKeyboardButtons.addEventListener("pointerdown", handleTouchKeyboardPointerDown);
-  ui.touchKeyboardButtons.addEventListener("pointerup", handleTouchKeyboardPointerEnd);
-  ui.touchKeyboardButtons.addEventListener("pointercancel", handleTouchKeyboardPointerEnd);
-  ui.touchKeyboardButtons.addEventListener("pointerleave", handleTouchKeyboardPointerEnd);
 
   ui.nextBtn.addEventListener("click", () => {
     if (!state.currentAnswered) {
@@ -269,7 +231,6 @@ function hydrateSettings() {
       gender: state.meta.defaults.gender,
       key: state.meta.defaults.key,
       temperament: state.meta.defaults.temperament,
-      toneLength: "normal",
       showVisualHints: state.meta.defaults.showVisualHints,
     };
     persistSettings();
@@ -281,7 +242,6 @@ function hydrateSettings() {
     gender: saved.gender || state.meta.defaults.gender,
     key: saved.key || state.meta.defaults.key,
     temperament: saved.temperament || state.meta.defaults.temperament,
-    toneLength: saved.toneLength || "normal",
     showVisualHints:
       typeof saved.showVisualHints === "boolean"
         ? saved.showVisualHints
@@ -293,9 +253,6 @@ function renderSettingsControls() {
   renderSelect(ui.genderSelect, state.meta.genders, state.settings.gender);
   renderSelect(ui.keySelect, state.meta.keys, state.settings.key);
   renderSelect(ui.temperamentSelect, state.meta.temperaments, state.settings.temperament);
-  if (ui.toneLengthSelect) {
-    renderSelect(ui.toneLengthSelect, TONE_LENGTH_OPTIONS, state.settings.toneLength);
-  }
 
   ui.showVisualHints.checked = state.settings.showVisualHints;
   ui.quizShowVisualHints.checked = state.settings.showVisualHints;
@@ -320,28 +277,9 @@ function onSettingsChange() {
   state.settings.gender = ui.genderSelect.value;
   state.settings.key = ui.keySelect.value;
   state.settings.temperament = ui.temperamentSelect.value;
-  state.settings.toneLength = ui.toneLengthSelect?.value || state.settings.toneLength || "normal";
   state.keyboardTonePlan = null;
   persistSettings();
-  stopAllHeldTones();
-  warmAudioForCurrentSettings();
-}
-
-function warmAudioForCurrentSettings(options = {}) {
-  const shouldResume = Boolean(options.resumeContext);
-  void (async () => {
-    try {
-      if (shouldResume) {
-        await ensureAudioContext(true);
-      } else {
-        getOrCreateAudioContext();
-      }
-      await preloadKeyboardSamples();
-      await preloadPianoSamples();
-    } catch {
-      // Warm-up is best-effort. Explicit playback paths show user-visible errors.
-    }
-  })();
+  primeAudioPipeline();
 }
 
 function setVisualHints(enabled) {
@@ -459,9 +397,10 @@ async function startSession(moduleId) {
     state.answers = new Array(state.session.questions.length).fill(null);
     state.currentAnswered = false;
 
-    await ensureAudioContext();
-    await preloadKeyboardSamples();
-    await preloadPianoSamples();
+    await unlockAudioPipeline();
+    void preloadAllSamples().catch(() => {
+      // Warmup failures are non-fatal; playback paths retry on demand.
+    });
     navigateToView("quizView");
     renderCurrentQuestion();
   } catch (error) {
@@ -499,7 +438,7 @@ function renderCurrentQuestion() {
   renderAnswerArea(question);
 
   window.setTimeout(() => {
-    void playCurrentQuestion({ mode: "auto" });
+    void playCurrentQuestion();
   }, 80);
 }
 
@@ -952,7 +891,7 @@ function renderResult(correctCount, total, accuracy, wrongItems) {
     replay.type = "button";
     replay.textContent = "Replay";
     replay.addEventListener("click", () => {
-      void playNotes(item.question.notes, { durationMs: NOTE_DURATION_FULL_MS });
+      void playNotes(item.question.notes);
     });
 
     card.append(title, prompt, yourAnswer, rightAnswer, replay);
@@ -967,29 +906,67 @@ function getOrCreateAudioContext() {
   }
 
   if (!state.audioCtx) {
-    state.audioCtx = new AudioContextClass();
+    state.audioCtx = new AudioContextClass({ latencyHint: "interactive" });
   }
   return state.audioCtx;
 }
 
-async function ensureAudioContext(shouldResume = true) {
+async function ensureAudioContextRunning() {
   const context = getOrCreateAudioContext();
-  if (shouldResume && context.state === "suspended") {
-    await context.resume();
+  if (context.state === "running") {
+    return context;
   }
+  await unlockAudioPipeline();
   return context;
 }
 
-async function preloadPianoSamples() {
+function warmAudioPipelineOnce() {
+  void unlockAudioPipeline();
+}
+
+function primeAudioPipeline() {
+  try {
+    getOrCreateAudioContext();
+    void preloadAllSamples().catch(() => {
+      // Best effort warmup.
+    });
+  } catch {
+    // Best effort warmup.
+  }
+}
+
+async function unlockAudioPipeline() {
+  const context = getOrCreateAudioContext();
+  if (context.state === "running") {
+    state.audioUnlocked = true;
+    return;
+  }
+
+  if (!state.audioUnlockPromise) {
+    state.audioUnlockPromise = context
+      .resume()
+      .then(() => {
+        state.audioUnlocked = true;
+      })
+      .finally(() => {
+        state.audioUnlockPromise = null;
+      });
+  }
+
+  await state.audioUnlockPromise;
+}
+
+async function preloadAllSamples() {
   if (state.sampleLoadPromise) {
     return state.sampleLoadPromise;
   }
+
   if (!state.audioManifest) {
-    throw new Error("Piano sample manifest is not loaded");
+    throw new Error("Piano manifest is not loaded");
   }
 
   state.sampleLoadPromise = (async () => {
-    const context = await ensureAudioContext(false);
+    const context = getOrCreateAudioContext();
     await Promise.all(state.audioManifest.samples.map((sample) => ensureSampleBuffer(context, sample.id)));
   })();
 
@@ -1007,20 +984,31 @@ async function ensureSampleBuffer(context, sampleId) {
     return cached;
   }
 
-  const sample = state.sampleById.get(sampleId);
-  if (!sample) {
-    throw new Error(`Unknown piano sample '${sampleId}'`);
+  const inFlight = state.sampleFetchPromises.get(sampleId);
+  if (inFlight) {
+    return inFlight;
   }
 
-  const response = await fetch(sample.file, { cache: "force-cache" });
-  if (!response.ok) {
-    throw new Error(`Failed to load piano sample '${sampleId}'`);
-  }
+  const promise = (async () => {
+    const sample = state.sampleById.get(sampleId);
+    if (!sample) {
+      throw new Error(`Unknown piano sample '${sampleId}'`);
+    }
 
-  const encoded = await response.arrayBuffer();
-  const decoded = await decodeAudioData(context, encoded);
-  state.sampleBufferCache.set(sampleId, decoded);
-  return decoded;
+    const response = await fetch(sample.file, { cache: "force-cache" });
+    if (!response.ok) {
+      throw new Error(`Failed to load piano sample '${sampleId}'`);
+    }
+
+    const encoded = await response.arrayBuffer();
+    const decoded = await decodeAudioData(context, encoded);
+    state.sampleBufferCache.set(sampleId, decoded);
+    state.sampleFetchPromises.delete(sampleId);
+    return decoded;
+  })();
+
+  state.sampleFetchPromises.set(sampleId, promise);
+  return promise;
 }
 
 function decodeAudioData(context, encoded) {
@@ -1066,7 +1054,6 @@ function mapTargetHzToSample(targetHz) {
   return {
     sampleId: nearestSample.id,
     sampleHz: nearestSample.hz,
-    playbackRate: targetHz / nearestSample.hz,
     centsError,
   };
 }
@@ -1081,46 +1068,84 @@ function validateMapping(mapping, targetHz) {
   );
 }
 
-function resolveToneLengthDurationMs(toneLengthId) {
-  const found = TONE_LENGTH_OPTIONS.find((item) => item.id === toneLengthId);
-  return found ? found.durationMs : NOTE_DURATION_NORMAL_MS;
-}
-
-function getAutoPlayDurationMs() {
-  return resolveToneLengthDurationMs(state.settings?.toneLength || "normal");
-}
-
-async function preloadKeyboardSamples() {
-  if (!state.audioManifest || !state.meta) {
-    return;
-  }
-
-  const plan = ensureKeyboardTonePlan();
-  if (!plan) {
-    return;
-  }
-
-  const context = await ensureAudioContext(false);
-  await Promise.all(plan.sampleIds.map((sampleId) => ensureSampleBuffer(context, sampleId)));
-}
-
-function warmAudioPipelineOnce() {
-  warmAudioForCurrentSettings({ resumeContext: true });
-}
-
-async function playCurrentQuestion(options = {}) {
+async function playCurrentQuestion() {
   const question = currentQuestion();
   if (!question) {
     return;
   }
+  await playNotes(question.notes);
+}
 
-  const mode = options.mode || "auto";
-  const durationMs = mode === "repeat" ? NOTE_DURATION_FULL_MS : getAutoPlayDurationMs();
-  await playNotes(question.notes, { durationMs });
+async function playNotes(notes) {
+  if (!Array.isArray(notes) || !notes.length || state.isPlaying) {
+    return;
+  }
+
+  try {
+    state.isPlaying = true;
+    ui.repeatBtn.disabled = true;
+
+    const context = await ensureAudioContextRunning();
+
+    const start = context.currentTime + 0.03;
+    const fullSampleDurationMs = getFullSampleDurationMs();
+    const durationSec = fullSampleDurationMs / 1000;
+    const gapSec = NOTE_GAP_MS / 1000;
+    const sampleIds = Array.from(new Set(notes.map((note) => resolveSampleIdForNote(note))));
+
+    await Promise.all(sampleIds.map((sampleId) => ensureSampleBuffer(context, sampleId)));
+
+    for (let index = 0; index < notes.length; index += 1) {
+      const note = notes[index];
+      const sampleId = resolveSampleIdForNote(note);
+      const at = start + index * (durationSec + gapSec);
+      scheduleRawSample(context, sampleId, at);
+    }
+
+    const totalMs = notes.length * fullSampleDurationMs + (notes.length - 1) * NOTE_GAP_MS + 120;
+    await sleep(totalMs);
+  } catch (error) {
+    showGlobalError(error.message || "Failed to play tones");
+  } finally {
+    state.isPlaying = false;
+    ui.repeatBtn.disabled = false;
+  }
+}
+
+function resolveSampleIdForNote(note) {
+  if (typeof note.sampleId === "string" && state.sampleById.has(note.sampleId)) {
+    return note.sampleId;
+  }
+
+  const mapping = mapTargetHzToSample(note.frequency);
+  validateMapping(mapping, note.frequency);
+  return mapping.sampleId;
+}
+
+function scheduleRawSample(context, sampleId, startAt) {
+  const buffer = state.sampleBufferCache.get(sampleId);
+  if (!buffer) {
+    throw new Error(`Decoded sample '${sampleId}' is unavailable`);
+  }
+
+  if (state.activeVoices.length >= MAX_POLYPHONY) {
+    return;
+  }
+
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.connect(context.destination);
+
+  source.onended = () => {
+    state.activeVoices = state.activeVoices.filter((voice) => voice !== source);
+  };
+
+  state.activeVoices.push(source);
+  source.start(startAt);
 }
 
 function handleGlobalToneKeydown(event) {
-  if (event.ctrlKey || event.metaKey || event.altKey) {
+  if (event.metaKey || event.altKey) {
     return;
   }
 
@@ -1138,45 +1163,12 @@ function handleGlobalToneKeydown(event) {
     return;
   }
 
-  event.preventDefault();
   if (event.repeat) {
     return;
   }
-  handleTonePressStart(getKeyboardToneId(event), degree);
-}
 
-function goHomeView() {
-  stopAllHeldTones();
-  state.session = null;
-  navigateToView("dashboardView");
-  renderModuleGrid();
-  renderHistory();
-}
-
-function handleGlobalToneKeyup(event) {
-  const degree = resolveKeyboardDegree(event);
-  if (degree === null) {
-    return;
-  }
-  handleTonePressEnd(getKeyboardToneId(event));
-}
-
-function resolveKeyboardDegree(event) {
-  if (/^[1-7]$/.test(event.key)) {
-    return Number(event.key);
-  }
-
-  const code = event.code || "";
-  const match = /^(Digit|Numpad)([1-7])$/.exec(code);
-  if (match) {
-    return Number(match[2]);
-  }
-
-  return null;
-}
-
-function getKeyboardToneId(event) {
-  return `kbd:${event.code || event.key}`;
+  event.preventDefault();
+  void playKeyboardDegree(degree, resolveOctaveShiftFromEvent(event));
 }
 
 function handleTouchKeyboardPointerDown(event) {
@@ -1192,267 +1184,40 @@ function handleTouchKeyboardPointerDown(event) {
 
   event.preventDefault();
   button.classList.add("is-pressed");
-  button.dataset.activePointerId = String(event.pointerId);
-  handleTonePressStart(`touch:${event.pointerId}`, degree);
+  window.setTimeout(() => {
+    button.classList.remove("is-pressed");
+  }, 140);
+
+  void playKeyboardDegree(degree);
 }
 
-function handleTouchKeyboardPointerEnd(event) {
-  const toneId = `touch:${event.pointerId}`;
-  handleTonePressEnd(toneId);
-
-  const activeButton = ui.touchKeyboardButtons.querySelector(
-    `button[data-active-pointer-id="${event.pointerId}"]`,
-  );
-  if (activeButton) {
-    activeButton.classList.remove("is-pressed");
-    delete activeButton.dataset.activePointerId;
-  }
-}
-
-function handleTonePressStart(toneId, degree) {
-  if (state.activeTonePresses.has(toneId)) {
-    return;
-  }
-  state.activeTonePresses.add(toneId);
-  void playKeyboardTapTone(degree);
-  queueHeldToneStart(toneId, degree);
-}
-
-function handleTonePressEnd(toneId) {
-  state.activeTonePresses.delete(toneId);
-  cancelHeldToneStart(toneId);
-  stopHeldTone(toneId);
-}
-
-function queueHeldToneStart(toneId, degree) {
-  cancelHeldToneStart(toneId);
-  const timerId = window.setTimeout(() => {
-    state.heldStartTimerByToneId.delete(toneId);
-    if (!state.activeTonePresses.has(toneId)) {
+async function playKeyboardDegree(degree, octaveShift = 0) {
+  try {
+    const keyboardPlan = ensureKeyboardTonePlan();
+    const toneSpec = keyboardPlan?.degreeMap.get(degree);
+    if (!toneSpec) {
       return;
     }
-    void startHeldTone(toneId, degree);
-  }, HELD_TONE_START_DELAY_MS);
-  state.heldStartTimerByToneId.set(toneId, timerId);
-}
 
-function cancelHeldToneStart(toneId) {
-  const timerId = state.heldStartTimerByToneId.get(toneId);
-  if (!timerId) {
-    return;
-  }
-  window.clearTimeout(timerId);
-  state.heldStartTimerByToneId.delete(toneId);
-}
+    const targetFrequency = clampFrequencyToSampleRange(
+      toneSpec.frequency * (2 ** octaveShift),
+    );
+    const mapping = mapTargetHzToSample(targetFrequency);
 
-async function playKeyboardTapTone(degree) {
-  const keyboardPlan = ensureKeyboardTonePlan();
-  const toneSpec = keyboardPlan?.degreeMap.get(degree);
-  if (!toneSpec) {
-    return;
-  }
-
-  const { frequency, mapping } = toneSpec;
-  const durationSec = MIN_HELD_TONE_MS / 1000;
-
-  try {
-    const context = await ensureAudioContext();
-    let buffer = state.sampleBufferCache.get(mapping.sampleId) || null;
-    if (!buffer) {
-      buffer = await ensureSampleBuffer(context, mapping.sampleId);
-    }
-    const startAt = context.currentTime + 0.001;
-    scheduleSampleTone(context, frequency, mapping, startAt, durationSec);
+    const context = await ensureAudioContextRunning();
+    await ensureSampleBuffer(context, mapping.sampleId);
+    scheduleRawSample(context, mapping.sampleId, context.currentTime + 0.001);
   } catch (error) {
-    if (ENABLE_OSCILLATOR_FALLBACK) {
-      try {
-        const context = await ensureAudioContext();
-        const startAt = context.currentTime + 0.001;
-        scheduleOscillatorTone(context, frequency, startAt, durationSec);
-      } catch {
-        showGlobalError(error.message || "Failed to play keyboard tap tone");
-      }
-    } else {
-      showGlobalError(error.message || "Failed to play keyboard tap tone");
-    }
+    showGlobalError(error.message || "Failed to play keyboard tone");
   }
 }
 
-async function startHeldTone(toneId, degree) {
-  if (state.heldTones.has(toneId)) {
-    stopHeldTone(toneId, true);
-    state.heldTones.delete(toneId);
+function getFullSampleDurationMs() {
+  const durationMs = Number(state.audioManifest?.durationMs);
+  if (Number.isFinite(durationMs) && durationMs > 0) {
+    return durationMs;
   }
-
-  const keyboardPlan = ensureKeyboardTonePlan();
-  const toneSpec = keyboardPlan?.degreeMap.get(degree);
-  if (!toneSpec) {
-    return;
-  }
-
-  const { frequency, mapping } = toneSpec;
-
-  const toneEntry = {
-    pending: true,
-    requestedStop: false,
-    source: null,
-    gainNode: null,
-    startedAtMs: 0,
-    stopTimeoutId: null,
-  };
-  state.heldTones.set(toneId, toneEntry);
-
-  const cachedContext = state.audioCtx;
-  if (cachedContext && cachedContext.state === "running") {
-    const cachedBuffer = state.sampleBufferCache.get(mapping.sampleId) || null;
-    if (cachedBuffer) {
-      startHeldToneFromBuffer(toneEntry, cachedContext, cachedBuffer, mapping);
-      return;
-    }
-  }
-
-  try {
-    const context = await ensureAudioContext();
-    let buffer = state.sampleBufferCache.get(mapping.sampleId) || null;
-
-    if (!buffer && ENABLE_OSCILLATOR_FALLBACK) {
-      const fallbackTone = startHeldOscillatorTone(frequency);
-      if (fallbackTone) {
-        state.heldTones.set(toneId, fallbackTone);
-        if (toneEntry.requestedStop) {
-          stopHeldTone(toneId);
-        }
-        void ensureSampleBuffer(context, mapping.sampleId).catch(() => {});
-        return;
-      }
-    }
-
-    if (!buffer) {
-      buffer = await ensureSampleBuffer(context, mapping.sampleId);
-    }
-
-    const activeEntry = state.heldTones.get(toneId);
-    if (!activeEntry || activeEntry !== toneEntry) {
-      return;
-    }
-
-    startHeldToneFromBuffer(toneEntry, context, buffer, mapping);
-
-    if (toneEntry.requestedStop) {
-      stopHeldTone(toneId);
-    }
-  } catch (error) {
-    if (ENABLE_OSCILLATOR_FALLBACK) {
-      const fallbackTone = startHeldOscillatorTone(frequency);
-      if (fallbackTone) {
-        state.heldTones.set(toneId, fallbackTone);
-        return;
-      }
-    }
-    state.heldTones.delete(toneId);
-    showGlobalError(error.message || "Failed to play held piano tone");
-  }
-}
-
-function startHeldToneFromBuffer(toneEntry, context, buffer, mapping) {
-  const startAt = context.currentTime;
-  const source = context.createBufferSource();
-  const gainNode = context.createGain();
-
-  source.buffer = buffer;
-  source.playbackRate.setValueAtTime(mapping.playbackRate, startAt);
-  configureHeldLoopWindow(source, buffer);
-
-  gainNode.gain.setValueAtTime(0.0001, startAt);
-  gainNode.gain.exponentialRampToValueAtTime(HELD_TONE_GAIN, startAt + HELD_TONE_ATTACK_SEC);
-
-  source.connect(gainNode);
-  gainNode.connect(context.destination);
-  source.start(startAt);
-
-  toneEntry.pending = false;
-  toneEntry.source = source;
-  toneEntry.gainNode = gainNode;
-  toneEntry.startedAtMs = performance.now();
-}
-
-function stopHeldTone(toneId, force = false) {
-  const tone = state.heldTones.get(toneId);
-  if (!tone) {
-    return;
-  }
-
-  if (tone.pending || !tone.source || !tone.gainNode) {
-    tone.requestedStop = true;
-    return;
-  }
-
-  if (!force) {
-    const elapsedMs = performance.now() - (tone.startedAtMs || 0);
-    if (elapsedMs < MIN_HELD_TONE_MS) {
-      if (!tone.stopTimeoutId) {
-        tone.stopTimeoutId = window.setTimeout(() => {
-          const activeTone = state.heldTones.get(toneId);
-          if (!activeTone) {
-            return;
-          }
-          activeTone.stopTimeoutId = null;
-          stopHeldTone(toneId, true);
-        }, MIN_HELD_TONE_MS - elapsedMs);
-      }
-      return;
-    }
-  }
-
-  if (tone.stopTimeoutId) {
-    window.clearTimeout(tone.stopTimeoutId);
-    tone.stopTimeoutId = null;
-  }
-
-  const context = state.audioCtx;
-  const now = context ? context.currentTime : 0;
-
-  try {
-    tone.gainNode.gain.cancelScheduledValues(now);
-    tone.gainNode.gain.setValueAtTime(tone.gainNode.gain.value || 0.0001, now);
-    tone.gainNode.gain.exponentialRampToValueAtTime(0.0001, now + HELD_TONE_RELEASE_SEC);
-    tone.source.stop(now + HELD_TONE_RELEASE_SEC + 0.01);
-  } catch {
-    // Ignore if source already stopped.
-  }
-
-  state.heldTones.delete(toneId);
-}
-
-function configureHeldLoopWindow(source, buffer) {
-  const fadeOutSeconds = 0.18;
-  const loopStart = 0.03;
-  const loopEnd = Math.max(loopStart + 0.12, buffer.duration - fadeOutSeconds);
-  if (loopEnd <= loopStart) {
-    return;
-  }
-  source.loop = true;
-  source.loopStart = loopStart;
-  source.loopEnd = loopEnd;
-}
-
-function stopAllHeldTones() {
-  for (const timerId of state.heldStartTimerByToneId.values()) {
-    window.clearTimeout(timerId);
-  }
-  state.heldStartTimerByToneId.clear();
-  state.activeTonePresses.clear();
-
-  for (const toneId of Array.from(state.heldTones.keys())) {
-    stopHeldTone(toneId);
-  }
-
-  ui.touchKeyboardButtons
-    .querySelectorAll("button[data-active-pointer-id]")
-    .forEach((button) => {
-      button.classList.remove("is-pressed");
-      delete button.dataset.activePointerId;
-    });
+  return 1000;
 }
 
 function ensureKeyboardTonePlan() {
@@ -1467,27 +1232,53 @@ function ensureKeyboardTonePlan() {
   }
 
   const degreeMap = new Map();
-  const sampleIds = new Set();
 
   for (let degree = 1; degree <= 7; degree += 1) {
     const semitone = NATURAL_DEGREE_TO_SEMITONE[degree];
-    const frequency = calculateFrequencyForSemitone(
-      semitone,
-      toneContext.doFrequency,
-      toneContext.temperament,
-    );
-    const mapping = mapTargetHzToSample(frequency);
-    validateMapping(mapping, frequency);
-    degreeMap.set(degree, { frequency, mapping });
-    sampleIds.add(mapping.sampleId);
+    const frequency = toneContext.doFrequency * (2 ** (semitone / 12));
+    degreeMap.set(degree, { frequency });
   }
 
   state.keyboardTonePlan = {
     signature,
     degreeMap,
-    sampleIds: Array.from(sampleIds),
   };
   return state.keyboardTonePlan;
+}
+
+function resolveOctaveShiftFromEvent(event) {
+  const up = Boolean(event.shiftKey);
+  const down = Boolean(event.ctrlKey);
+  if (up && down) {
+    return 0;
+  }
+  if (up) {
+    return 1;
+  }
+  if (down) {
+    return -1;
+  }
+  return 0;
+}
+
+function clampFrequencyToSampleRange(frequency) {
+  if (!state.audioManifest || !Array.isArray(state.audioManifest.samples) || !state.audioManifest.samples.length) {
+    return frequency;
+  }
+  let minHz = Number.POSITIVE_INFINITY;
+  let maxHz = Number.NEGATIVE_INFINITY;
+  for (const sample of state.audioManifest.samples) {
+    if (sample.hz < minHz) {
+      minHz = sample.hz;
+    }
+    if (sample.hz > maxHz) {
+      maxHz = sample.hz;
+    }
+  }
+  if (!Number.isFinite(minHz) || !Number.isFinite(maxHz)) {
+    return frequency;
+  }
+  return Math.min(maxHz, Math.max(minHz, frequency));
 }
 
 function getToneContext() {
@@ -1514,150 +1305,25 @@ function getToneContext() {
   return { gender, key, doFrequency, temperament };
 }
 
-function calculateFrequencyForSemitone(semitone, doFrequency, temperament) {
-  if (temperament === "just_intonation") {
-    return doFrequency * JUST_INTONATION_RATIOS[semitone];
+function resolveKeyboardDegree(event) {
+  if (/^[1-7]$/.test(event.key)) {
+    return Number(event.key);
   }
-  return doFrequency * (2 ** (semitone / 12));
+
+  const code = event.code || "";
+  const match = /^(Digit|Numpad)([1-7])$/.exec(code);
+  if (match) {
+    return Number(match[2]);
+  }
+
+  return null;
 }
 
-async function playNotes(notes, options = {}) {
-  if (!Array.isArray(notes) || !notes.length || state.isPlaying) {
-    return;
-  }
-
-  const durationMs = options.durationMs || NOTE_DURATION_NORMAL_MS;
-
-  try {
-    state.isPlaying = true;
-    ui.repeatBtn.disabled = true;
-
-    const context = await ensureAudioContext();
-    await preloadPianoSamples();
-
-    const start = context.currentTime + 0.05;
-    const durationSec = durationMs / 1000;
-    const gapSec = NOTE_GAP_MS / 1000;
-    const mappings = notes.map((note) => {
-      const mapping = mapTargetHzToSample(note.frequency);
-      validateMapping(mapping, note.frequency);
-      return mapping;
-    });
-
-    await Promise.all(
-      Array.from(new Set(mappings.map((item) => item.sampleId))).map((sampleId) =>
-        ensureSampleBuffer(context, sampleId),
-      ),
-    );
-
-    notes.forEach((note, index) => {
-      const at = start + index * (durationSec + gapSec);
-      scheduleSampleTone(context, note.frequency, mappings[index], at, durationSec);
-    });
-
-    const totalMs = notes.length * durationMs + (notes.length - 1) * NOTE_GAP_MS + 120;
-    await sleep(totalMs);
-  } catch (error) {
-    if (ENABLE_OSCILLATOR_FALLBACK) {
-      try {
-        const context = await ensureAudioContext();
-        const start = context.currentTime + 0.02;
-        const durationSec = durationMs / 1000;
-        const gapSec = NOTE_GAP_MS / 1000;
-        notes.forEach((note, index) => {
-          const at = start + index * (durationSec + gapSec);
-          scheduleOscillatorTone(context, note.frequency, at, durationSec);
-        });
-        const totalMs = notes.length * durationMs + (notes.length - 1) * NOTE_GAP_MS + 120;
-        await sleep(totalMs);
-        showGlobalError("Sample playback failed. Using oscillator fallback.");
-      } catch {
-        showGlobalError(error.message || "Failed to play tones");
-      }
-    } else {
-      showGlobalError(error.message || "Failed to play piano samples");
-    }
-  } finally {
-    state.isPlaying = false;
-    ui.repeatBtn.disabled = false;
-  }
-}
-
-function scheduleSampleTone(context, frequency, mapping, startAt, durationSec) {
-  const buffer = state.sampleBufferCache.get(mapping.sampleId);
-  if (!buffer) {
-    if (ENABLE_OSCILLATOR_FALLBACK) {
-      scheduleOscillatorTone(context, frequency, startAt, durationSec);
-      return;
-    }
-    throw new Error(`Decoded sample '${mapping.sampleId}' is unavailable`);
-  }
-
-  const source = context.createBufferSource();
-  const gainNode = context.createGain();
-  const peakGain = 1.0;
-  const releaseAt = Math.max(startAt + 0.03, startAt + durationSec - 0.08);
-
-  source.buffer = buffer;
-  source.playbackRate.setValueAtTime(mapping.playbackRate, startAt);
-
-  gainNode.gain.setValueAtTime(0.0001, startAt);
-  gainNode.gain.exponentialRampToValueAtTime(peakGain, startAt + 0.014);
-  gainNode.gain.setValueAtTime(peakGain, releaseAt);
-  gainNode.gain.exponentialRampToValueAtTime(0.0001, startAt + durationSec);
-
-  source.connect(gainNode);
-  gainNode.connect(context.destination);
-
-  source.start(startAt);
-  source.stop(startAt + durationSec + 0.02);
-}
-
-function startHeldOscillatorTone(frequency) {
-  const context = state.audioCtx;
-  if (!context) {
-    return null;
-  }
-
-  const startAt = context.currentTime;
-  const source = context.createOscillator();
-  const gainNode = context.createGain();
-
-  source.type = "triangle";
-  source.frequency.setValueAtTime(frequency, startAt);
-
-  gainNode.gain.setValueAtTime(0.0001, startAt);
-  gainNode.gain.exponentialRampToValueAtTime(HELD_TONE_GAIN, startAt + HELD_TONE_ATTACK_SEC);
-
-  source.connect(gainNode);
-  gainNode.connect(context.destination);
-  source.start(startAt);
-
-  return {
-    source,
-    gainNode,
-    pending: false,
-    requestedStop: false,
-    startedAtMs: performance.now(),
-    stopTimeoutId: null,
-  };
-}
-
-function scheduleOscillatorTone(context, frequency, startAt, durationSec) {
-  const source = context.createOscillator();
-  const gainNode = context.createGain();
-
-  source.type = "triangle";
-  source.frequency.setValueAtTime(frequency, startAt);
-
-  gainNode.gain.setValueAtTime(0.0001, startAt);
-  gainNode.gain.exponentialRampToValueAtTime(0.3, startAt + 0.02);
-  gainNode.gain.exponentialRampToValueAtTime(0.0001, startAt + durationSec);
-
-  source.connect(gainNode);
-  gainNode.connect(context.destination);
-  source.start(startAt);
-  source.stop(startAt + durationSec + 0.01);
+function goHomeView() {
+  state.session = null;
+  navigateToView("dashboardView");
+  renderModuleGrid();
+  renderHistory();
 }
 
 function switchView(viewId) {

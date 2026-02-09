@@ -37,7 +37,7 @@ def test_compare_two_has_distinct_notes_per_question():
         module_id="M2-L4",
         gender="female",
         key="F#/Gb",
-        temperament="just_intonation",
+        temperament="equal_temperament",
     )
 
     for question in session["questions"]:
@@ -71,7 +71,7 @@ def test_single_note_l4_requires_accidental_selector():
         module_id="MS-L4",
         gender="female",
         key="A",
-        temperament="just_intonation",
+        temperament="equal_temperament",
     )
 
     for question in session["questions"]:
@@ -113,7 +113,7 @@ def test_sort_three_l5_has_whole_tone_steps_when_sorted():
         module_id="M3-L5",
         gender="female",
         key="E",
-        temperament="just_intonation",
+        temperament="equal_temperament",
     )
 
     for question in session["questions"]:
@@ -135,3 +135,19 @@ def test_sort_four_l6_has_semitone_steps_when_sorted():
         semitones = sorted(note["semitone"] for note in question["notes"])
         diffs = [right - left for left, right in zip(semitones, semitones[1:])]
         assert diffs == [1, 1, 1]
+
+
+def test_all_generated_notes_include_sample_id_and_midi():
+    random.seed(41)
+    session = generate_session(
+        module_id="M3-L3",
+        gender="male",
+        key="G",
+        temperament="equal_temperament",
+    )
+
+    for question in session["questions"]:
+        for note in question["notes"]:
+            assert isinstance(note["sampleId"], str)
+            assert note["sampleId"].startswith("m")
+            assert isinstance(note["midi"], int)

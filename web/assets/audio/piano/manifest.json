@@ -1,330 +1,465 @@
 {
-  "version": 1,
-  "source": "University of Iowa MIS Piano (mf)",
+  "version": 4,
+  "source": "University of Iowa MIS Piano (ff)",
   "sourceUrl": "https://theremin.music.uiowa.edu/sound%20files/MIS/Piano_Other/piano",
-  "durationMs": 2000,
+  "durationMs": 1000,
   "sampleRate": 44100,
   "codec": "aac",
-  "bitrate": "128k",
+  "bitrate": "160k",
+  "sampleHzRange": [
+    70.0,
+    1000.0
+  ],
+  "alignment": {
+    "method": "silenceremove_start",
+    "startThresholdDb": -50,
+    "startSilenceKeepMs": 3
+  },
   "normalization": {
-    "type": "loudnorm",
-    "integratedLufs": -20.0,
-    "lra": 7.0,
-    "truePeakDbtp": -2.0
-  },
-  "preprocess": {
-    "onsetDetection": {
-      "thresholdRatio": 0.08,
-      "thresholdFloor": 0.003,
-      "minStreakSamples": 96
-    },
-    "trimStartMsRangeBeforePadding": [
-      0,
-      473
+    "method": "peak_normalize",
+    "targetPeakLinear": 0.9,
+    "gainClamp": [
+      0.6,
+      3.0
     ],
-    "preAttackMs": 5,
-    "fadeInMs": 3,
-    "fadeOutMs": 80,
-    "gainCompensation": {
-      "windowStartMs": 30,
-      "windowMs": 450,
-      "targetRms": 0.1251794,
-      "gainClamp": [
-        0.65,
-        1.35
-      ]
-    }
+    "gainRange": [
+      1.742723,
+      3.0
+    ],
+    "peakRange": [
+      0.141063,
+      0.516433
+    ],
+    "windowRmsMs": 300,
+    "windowRmsRange": [
+      0.03147134,
+      0.18212334
+    ]
   },
-  "sampleCount": 35,
-  "targetFrequencyCount": 299,
-  "maxMappingErrorCents": 17.596288,
+  "sampleCount": 46,
+  "targetFrequencyCount": 35,
+  "maxMappingErrorCents": 0.169179,
   "worstMapping": {
-    "targetHz": 235.44,
-    "sampleId": "s10",
-    "sampleHz": 233.059105,
-    "playbackRate": 1.01021584,
-    "centsError": 17.596288
+    "targetHz": 293.636072,
+    "sampleId": "m062",
+    "midi": 62,
+    "sampleHz": 293.664768,
+    "centsError": -0.169179
   },
   "samples": [
     {
-      "id": "s00",
-      "semitoneOffset": 0,
+      "id": "m038",
+      "midi": 38,
+      "note": "D2",
+      "hz": 73.416192,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m038.m4a"
+    },
+    {
+      "id": "m039",
+      "midi": 39,
+      "note": "Eb2",
+      "hz": 77.781746,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m039.m4a"
+    },
+    {
+      "id": "m040",
+      "midi": 40,
+      "note": "E2",
+      "hz": 82.406889,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m040.m4a"
+    },
+    {
+      "id": "m041",
+      "midi": 41,
+      "note": "F2",
+      "hz": 87.307058,
+      "durationMs": 1000,
+      "gainApplied": 2.661573,
+      "file": "/assets/audio/piano/m041.m4a"
+    },
+    {
+      "id": "m042",
+      "midi": 42,
+      "note": "Gb2",
+      "hz": 92.498606,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m042.m4a"
+    },
+    {
+      "id": "m043",
+      "midi": 43,
+      "note": "G2",
+      "hz": 97.998859,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m043.m4a"
+    },
+    {
+      "id": "m044",
+      "midi": 44,
+      "note": "Ab2",
+      "hz": 103.826174,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m044.m4a"
+    },
+    {
+      "id": "m045",
+      "midi": 45,
+      "note": "A2",
+      "hz": 110.0,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m045.m4a"
+    },
+    {
+      "id": "m046",
+      "midi": 46,
+      "note": "Bb2",
+      "hz": 116.54094,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m046.m4a"
+    },
+    {
+      "id": "m047",
+      "midi": 47,
+      "note": "B2",
+      "hz": 123.470825,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m047.m4a"
+    },
+    {
+      "id": "m048",
+      "midi": 48,
       "note": "C3",
-      "hz": 130.8,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s00.m4a"
+      "hz": 130.812783,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m048.m4a"
     },
     {
-      "id": "s01",
-      "semitoneOffset": 1,
+      "id": "m049",
+      "midi": 49,
       "note": "Db3",
-      "hz": 138.577773,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s01.m4a"
+      "hz": 138.591315,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m049.m4a"
     },
     {
-      "id": "s02",
-      "semitoneOffset": 2,
+      "id": "m050",
+      "midi": 50,
       "note": "D3",
-      "hz": 146.818036,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s02.m4a"
+      "hz": 146.832384,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m050.m4a"
     },
     {
-      "id": "s03",
-      "semitoneOffset": 3,
+      "id": "m051",
+      "midi": 51,
       "note": "Eb3",
-      "hz": 155.548291,
-      "gain": 0.754235,
-      "file": "/assets/audio/piano/s03.m4a"
+      "hz": 155.563492,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m051.m4a"
     },
     {
-      "id": "s04",
-      "semitoneOffset": 4,
+      "id": "m052",
+      "midi": 52,
       "note": "E3",
-      "hz": 164.797673,
-      "gain": 0.725901,
-      "file": "/assets/audio/piano/s04.m4a"
+      "hz": 164.813778,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m052.m4a"
     },
     {
-      "id": "s05",
-      "semitoneOffset": 5,
+      "id": "m053",
+      "midi": 53,
       "note": "F3",
-      "hz": 174.597053,
-      "gain": 0.70914,
-      "file": "/assets/audio/piano/s05.m4a"
+      "hz": 174.614116,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m053.m4a"
     },
     {
-      "id": "s06",
-      "semitoneOffset": 6,
+      "id": "m054",
+      "midi": 54,
       "note": "Gb3",
-      "hz": 184.979134,
-      "gain": 0.803408,
-      "file": "/assets/audio/piano/s06.m4a"
+      "hz": 184.997211,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m054.m4a"
     },
     {
-      "id": "s07",
-      "semitoneOffset": 7,
+      "id": "m055",
+      "midi": 55,
       "note": "G3",
-      "hz": 195.978566,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s07.m4a"
+      "hz": 195.997718,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m055.m4a"
     },
     {
-      "id": "s08",
-      "semitoneOffset": 8,
+      "id": "m056",
+      "midi": 56,
       "note": "Ab3",
-      "hz": 207.632058,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s08.m4a"
+      "hz": 207.652349,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m056.m4a"
     },
     {
-      "id": "s09",
-      "semitoneOffset": 9,
+      "id": "m057",
+      "midi": 57,
       "note": "A3",
-      "hz": 219.978502,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s09.m4a"
+      "hz": 220.0,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m057.m4a"
     },
     {
-      "id": "s10",
-      "semitoneOffset": 10,
+      "id": "m058",
+      "midi": 58,
       "note": "Bb3",
-      "hz": 233.059105,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s10.m4a"
+      "hz": 233.081881,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m058.m4a"
     },
     {
-      "id": "s11",
-      "semitoneOffset": 11,
+      "id": "m059",
+      "midi": 59,
       "note": "B3",
-      "hz": 246.91752,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s11.m4a"
+      "hz": 246.941651,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m059.m4a"
     },
     {
-      "id": "s12",
-      "semitoneOffset": 12,
+      "id": "m060",
+      "midi": 60,
       "note": "C4",
-      "hz": 261.6,
-      "gain": 0.701281,
-      "file": "/assets/audio/piano/s12.m4a"
+      "hz": 261.625565,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m060.m4a"
     },
     {
-      "id": "s13",
-      "semitoneOffset": 13,
+      "id": "m061",
+      "midi": 61,
       "note": "Db4",
-      "hz": 277.155545,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s13.m4a"
+      "hz": 277.182631,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m061.m4a"
     },
     {
-      "id": "s14",
-      "semitoneOffset": 14,
+      "id": "m062",
+      "midi": 62,
       "note": "D4",
-      "hz": 293.636072,
-      "gain": 1.200814,
-      "file": "/assets/audio/piano/s14.m4a"
+      "hz": 293.664768,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m062.m4a"
     },
     {
-      "id": "s15",
-      "semitoneOffset": 15,
+      "id": "m063",
+      "midi": 63,
       "note": "Eb4",
-      "hz": 311.096581,
-      "gain": 0.782549,
-      "file": "/assets/audio/piano/s15.m4a"
+      "hz": 311.126984,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m063.m4a"
     },
     {
-      "id": "s16",
-      "semitoneOffset": 16,
+      "id": "m064",
+      "midi": 64,
       "note": "E4",
-      "hz": 329.595347,
-      "gain": 0.821687,
-      "file": "/assets/audio/piano/s16.m4a"
+      "hz": 329.627557,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m064.m4a"
     },
     {
-      "id": "s17",
-      "semitoneOffset": 17,
+      "id": "m065",
+      "midi": 65,
       "note": "F4",
-      "hz": 349.194106,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s17.m4a"
+      "hz": 349.228231,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m065.m4a"
     },
     {
-      "id": "s18",
-      "semitoneOffset": 18,
+      "id": "m066",
+      "midi": 66,
       "note": "Gb4",
-      "hz": 369.958268,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s18.m4a"
+      "hz": 369.994423,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m066.m4a"
     },
     {
-      "id": "s19",
-      "semitoneOffset": 19,
+      "id": "m067",
+      "midi": 67,
       "note": "G4",
-      "hz": 391.957131,
-      "gain": 1.0,
-      "file": "/assets/audio/piano/s19.m4a"
+      "hz": 391.995436,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m067.m4a"
     },
     {
-      "id": "s20",
-      "semitoneOffset": 20,
+      "id": "m068",
+      "midi": 68,
       "note": "Ab4",
-      "hz": 415.264115,
-      "gain": 0.760356,
-      "file": "/assets/audio/piano/s20.m4a"
+      "hz": 415.304698,
+      "durationMs": 1000,
+      "gainApplied": 1.742723,
+      "file": "/assets/audio/piano/m068.m4a"
     },
     {
-      "id": "s21",
-      "semitoneOffset": 21,
+      "id": "m069",
+      "midi": 69,
       "note": "A4",
-      "hz": 439.957004,
-      "gain": 0.732176,
-      "file": "/assets/audio/piano/s21.m4a"
+      "hz": 440.0,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m069.m4a"
     },
     {
-      "id": "s22",
-      "semitoneOffset": 22,
+      "id": "m070",
+      "midi": 70,
       "note": "Bb4",
-      "hz": 466.118209,
-      "gain": 0.862941,
-      "file": "/assets/audio/piano/s22.m4a"
+      "hz": 466.163762,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m070.m4a"
     },
     {
-      "id": "s23",
-      "semitoneOffset": 23,
+      "id": "m071",
+      "midi": 71,
       "note": "B4",
-      "hz": 493.83504,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s23.m4a"
+      "hz": 493.883301,
+      "durationMs": 1000,
+      "gainApplied": 1.774458,
+      "file": "/assets/audio/piano/m071.m4a"
     },
     {
-      "id": "s24",
-      "semitoneOffset": 24,
+      "id": "m072",
+      "midi": 72,
       "note": "C5",
-      "hz": 523.2,
-      "gain": 1.195652,
-      "file": "/assets/audio/piano/s24.m4a"
+      "hz": 523.251131,
+      "durationMs": 1000,
+      "gainApplied": 2.172572,
+      "file": "/assets/audio/piano/m072.m4a"
     },
     {
-      "id": "s25",
-      "semitoneOffset": 25,
+      "id": "m073",
+      "midi": 73,
       "note": "Db5",
-      "hz": 554.311091,
-      "gain": 0.9851,
-      "file": "/assets/audio/piano/s25.m4a"
+      "hz": 554.365262,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m073.m4a"
     },
     {
-      "id": "s26",
-      "semitoneOffset": 26,
+      "id": "m074",
+      "midi": 74,
       "note": "D5",
-      "hz": 587.272144,
-      "gain": 0.717437,
-      "file": "/assets/audio/piano/s26.m4a"
+      "hz": 587.329536,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m074.m4a"
     },
     {
-      "id": "s27",
-      "semitoneOffset": 27,
+      "id": "m075",
+      "midi": 75,
       "note": "Eb5",
-      "hz": 622.193163,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s27.m4a"
+      "hz": 622.253967,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m075.m4a"
     },
     {
-      "id": "s28",
-      "semitoneOffset": 28,
+      "id": "m076",
+      "midi": 76,
       "note": "E5",
-      "hz": 659.190693,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s28.m4a"
+      "hz": 659.255114,
+      "durationMs": 1000,
+      "gainApplied": 2.070744,
+      "file": "/assets/audio/piano/m076.m4a"
     },
     {
-      "id": "s29",
-      "semitoneOffset": 29,
+      "id": "m077",
+      "midi": 77,
       "note": "F5",
-      "hz": 698.388212,
-      "gain": 0.775628,
-      "file": "/assets/audio/piano/s29.m4a"
+      "hz": 698.456463,
+      "durationMs": 1000,
+      "gainApplied": 2.014532,
+      "file": "/assets/audio/piano/m077.m4a"
     },
     {
-      "id": "s30",
-      "semitoneOffset": 30,
+      "id": "m078",
+      "midi": 78,
       "note": "Gb5",
-      "hz": 739.916536,
-      "gain": 0.791561,
-      "file": "/assets/audio/piano/s30.m4a"
+      "hz": 739.988845,
+      "durationMs": 1000,
+      "gainApplied": 2.574021,
+      "file": "/assets/audio/piano/m078.m4a"
     },
     {
-      "id": "s31",
-      "semitoneOffset": 31,
+      "id": "m079",
+      "midi": 79,
       "note": "G5",
-      "hz": 783.914263,
-      "gain": 1.35,
-      "file": "/assets/audio/piano/s31.m4a"
+      "hz": 783.990872,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m079.m4a"
     },
     {
-      "id": "s32",
-      "semitoneOffset": 32,
+      "id": "m080",
+      "midi": 80,
       "note": "Ab5",
-      "hz": 830.52823,
-      "gain": 0.884974,
-      "file": "/assets/audio/piano/s32.m4a"
+      "hz": 830.609395,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m080.m4a"
     },
     {
-      "id": "s33",
-      "semitoneOffset": 33,
+      "id": "m081",
+      "midi": 81,
       "note": "A5",
-      "hz": 879.914009,
-      "gain": 0.730079,
-      "file": "/assets/audio/piano/s33.m4a"
+      "hz": 880.0,
+      "durationMs": 1000,
+      "gainApplied": 3.0,
+      "file": "/assets/audio/piano/m081.m4a"
     },
     {
-      "id": "s34",
-      "semitoneOffset": 34,
+      "id": "m082",
+      "midi": 82,
       "note": "Bb5",
-      "hz": 932.236419,
-      "gain": 0.800552,
-      "file": "/assets/audio/piano/s34.m4a"
+      "hz": 932.327523,
+      "durationMs": 1000,
+      "gainApplied": 2.985245,
+      "file": "/assets/audio/piano/m082.m4a"
+    },
+    {
+      "id": "m083",
+      "midi": 83,
+      "note": "B5",
+      "hz": 987.766603,
+      "durationMs": 1000,
+      "gainApplied": 2.634672,
+      "file": "/assets/audio/piano/m083.m4a"
     }
   ]
 }
