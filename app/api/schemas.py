@@ -14,6 +14,7 @@ class SessionCreateRequest(BaseModel):
     gender: Literal["male", "female"]
     key: str
     temperament: Literal["equal_temperament"]
+    instrument: Literal["piano", "guitar"] = "piano"
 
     @field_validator("key")
     @classmethod

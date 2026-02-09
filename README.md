@@ -19,6 +19,7 @@ Each session has 20 questions with first-attempt scoring.
 - 20-question fixed sessions
 - Module ladder with fixed difficulty per module
 - Settings:
+  - Instrument (`Piano` / `Guitar`)
   - Gender base Do (`male=130.8Hz`, `female=261.6Hz`)
   - Key (`1=C` to `1=B`)
   - Temperament (`Equal` only)
@@ -26,7 +27,8 @@ Each session has 20 questions with first-attempt scoring.
 - Optional visual pitch hints
 - First-attempt scoring + optional retry practice + show answer
 - Local progress persistence (`localStorage`)
-- Desktop keyboard `1-7` and mobile touch keyboard `1-7`
+- Desktop keyboard `1-7` plus alternate layout `m,.jklu`
+- Mobile/tablet compact keyboard `1-7` + optional full-screen keyboard mode
 - Browser history and top `Home` button navigation
 
 ## Modules
@@ -56,44 +58,62 @@ Notes:
 
 ## Audio Architecture (Current)
 
-This version uses **raw piano samples only** for all playback (quiz + keyboard):
+This version uses **raw sample playback only** for all playback (quiz + keyboard):
 
-- Source: University of Iowa MIS Piano (`ff`)
+- Sources:
+  - University of Iowa MIS Piano (`ff`)
+  - University of Iowa MIS Guitar (`ff`, onset-sliced from range recordings)
 - Singing-focused range: **70-1000Hz** with dense semitone coverage (`D2..B5`, 46 files)
-- Output assets: `web/assets/audio/piano/`
+- Output assets:
+  - `web/assets/audio/piano/`
+  - `web/assets/audio/guitar/`
 - File format: AAC `.m4a`, mono, 44.1kHz
-- Fixed duration: **1 second per sample**
+- Fixed duration:
+  - Piano: **1.0 second** per sample
+  - Guitar: **1.5 seconds** per sample
 - Offline preprocessing only:
-  - start alignment (`silenceremove` at source head)
+  - start alignment (`silenceremove` for piano, `aubio` onset alignment for guitar)
   - peak normalization for consistent loudness
 - Runtime playback:
   - WebAudio single engine only
   - no oscillator fallback
   - no runtime timbre shaping
   - quiz playback always uses full raw sample length
-  - keyboard playback always triggers full 1-second one-shot per tap
-  - polyphony cap = 5 active voices (extra taps are ignored until a voice slot frees)
+  - keyboard playback always triggers full sample-length one-shot per tap
+  - polyphony cap = 10 active voices (extra taps are ignored until a voice slot frees)
 
-Current built package size is about **0.82MB** for 46 samples.
+Current built package sizes:
 
-## Build/Rebuild Piano Samples
+- Piano: about **0.82MB** (46 samples)
+- Guitar: about **1.19MB** (46 samples at 1.5s)
+
+## Build/Rebuild Samples
 
 Requirements:
 
 - `python3`
 - `ffmpeg`
+- `aubioonset` and `aubiopitch` (required for guitar slicing)
 - internet access to the Iowa source files
 
-Command:
+Rebuild piano:
 
 ```bash
 python3 scripts/build_piano_samples.py --clean --refresh-sources --duration 1.0 --bitrate 160k
+```
+
+Rebuild guitar (default output is 1.5s per note):
+
+```bash
+python3 scripts/build_guitar_samples.py --clean --refresh-sources --duration 1.5 --bitrate 160k
 ```
 
 This regenerates:
 
 - `web/assets/audio/piano/*.m4a` (46 files)
 - `web/assets/audio/piano/manifest.json`
+- `web/assets/audio/guitar/*.m4a` (46 files)
+- `web/assets/audio/guitar/manifest.json`
 
 ## Quick Start (Local)
 
@@ -141,11 +161,12 @@ SSH into your server and run:
 ```bash
 cd /path/to/tonic-ear
 git fetch --all
-git checkout feature/raw-88-equal-webaudio-clean
+git checkout main
 git pull --ff-only
 docker compose down
-docker compose up -d --build
+docker compose up -d --build --force-recreate
 docker compose ps
+docker compose logs -f --tail=80
 ```
 
 Open:
@@ -185,7 +206,7 @@ If your Linux server LAN IP is `192.168.86.45`, devices on the same LAN can use:
 
 ## How To Use
 
-1. Choose `Gender`, `Key`, and `Temperament`.
+1. Choose `Instrument`, `Gender`, `Key`, and `Temperament`.
 2. Start a module.
 3. Each question auto-plays once.
 4. Use `Repeat` as needed.
@@ -196,12 +217,38 @@ If your Linux server LAN IP is `192.168.86.45`, devices on the same LAN can use:
 
 ## Keyboard / Touch Control
 
-- Desktop: press `1..7`
-- Desktop modifiers: hold `Shift` while pressing `1..7` to shift up one octave
-- Desktop modifiers: hold `Ctrl` while pressing `1..7` to shift down one octave
-- Mobile/Tablet: tap `1..7` touch keyboard
-- Each tap triggers a full 1-second raw sample (independent of press length)
-- Up to 5 notes can overlap; above that new taps are dropped
+- Desktop:
+  - press `1..7`
+  - alternate layout: `m=1`, `,=2`, `.=3`, `j=4`, `k=5`, `l=6`, `u=7`
+  - hold `Shift` while pressing a degree key to shift up one octave
+  - hold `Ctrl` while pressing a degree key to shift down one octave
+- Mobile/Tablet compact mode:
+  - tap `1..7`
+  - tap `Full Keyboard` (top-right of compact pad) to enter full-screen mode
+- Mobile/Tablet full-screen mode:
+  - right side numeric layout: `7 / 456 / 123`
+  - left side: `Oct+` and `Oct-` for octave shift
+  - hold `Oct+` and `Oct-` together for ~400ms to return to compact mode
+- Each tap triggers the full raw sample length of the selected instrument (piano 1.0s, guitar 1.5s), independent of press length
+- Up to 10 notes can overlap; above that new taps are dropped
+
+## iOS Audio Unlock Behavior
+
+- Unlock timeout is tuned to `800ms` (less aggressive than older 500ms).
+- First timeout no longer hard-fails the app; audio stays in a "pending unlock" state and retries on the next user gesture.
+- AudioContext recreation is delayed until repeated failures, reducing false failures on iPhone Safari refresh.
+
+If audio is silent right after refresh on iPhone, tap once on any keyboard key or `Repeat` to trigger the next unlock attempt.
+
+## Docker Build SSL Note (Corporate Network)
+
+If build fails with `CERTIFICATE_VERIFY_FAILED`, pass trusted hosts to pip during build:
+
+```bash
+docker compose build \
+  --build-arg PIP_EXTRA_ARGS="--trusted-host pypi.org --trusted-host files.pythonhosted.org"
+docker compose up -d --force-recreate
+```
 
 ## API
 
@@ -216,6 +263,7 @@ Request:
 ```json
 {
   "moduleId": "M2-L1",
+  "instrument": "guitar",
   "gender": "male",
   "key": "C",
   "temperament": "equal_temperament"
@@ -241,7 +289,7 @@ Coverage includes:
 
 - Equal temperament frequency correctness
 - Module generation and constraints
-- 70-1000Hz sample-manifest checks (46 files)
+- 70-1000Hz sample-manifest checks for piano and guitar (46 files each)
 - `< 10 cents` mapping bound verification
 - API validation (`just_intonation` rejected)
 
@@ -252,5 +300,7 @@ Saved in browser local storage:
 - `tonicEar.settings`
 - `tonicEar.history`
 - `tonicEar.moduleStats`
+
+`history` and `moduleStats` are tracked per instrument.
 
 No account system in v1.
