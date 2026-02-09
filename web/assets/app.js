@@ -1109,12 +1109,19 @@ function getOrCreateAudioContext() {
 }
 
 async function ensureAudioContextRunning() {
-  const context = getOrCreateAudioContext();
+  let context = getOrCreateAudioContext();
   if (context.state === "running") {
     return context;
   }
   configureAudioSessionIfSupported();
   await unlockAudioPipeline();
+  // unlockAudioPipeline may recreate AudioContext on iOS; always re-read the latest instance.
+  context = state.audioCtx || context;
+  if (context.state !== "running") {
+    appendAudioDebugLog(`Context state after unlock is '${context.state}', retrying unlock once`);
+    await unlockAudioPipeline();
+    context = state.audioCtx || context;
+  }
   if (context.state !== "running") {
     throw new Error("Audio context is not running");
   }
