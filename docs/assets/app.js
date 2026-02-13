@@ -1604,10 +1604,6 @@ async function playNotes(notes) {
 
     const context = await ensureAudioContextRunning();
 
-    const start = context.currentTime + 0.03;
-    const fullSampleDurationMs = getFullSampleDurationMs();
-    const durationSec = fullSampleDurationMs / 1000;
-    const gapSec = NOTE_GAP_MS / 1000;
     const sampleIds = Array.from(new Set(notes.map((note) => resolveSampleIdForNote(note))));
 
     await Promise.all(sampleIds.map((sampleId) => ensureSampleBuffer(context, sampleId)));
@@ -1615,12 +1611,18 @@ async function playNotes(notes) {
     for (let index = 0; index < notes.length; index += 1) {
       const note = notes[index];
       const sampleId = resolveSampleIdForNote(note);
-      const at = start + index * (durationSec + gapSec);
-      scheduleRawSample(context, sampleId, at);
-    }
+      const buffer = state.sampleBufferCache.get(sampleId);
+      if (!buffer) {
+        throw new Error(`Decoded sample '${sampleId}' is unavailable`);
+      }
 
-    const totalMs = notes.length * fullSampleDurationMs + (notes.length - 1) * NOTE_GAP_MS + 120;
-    await sleep(totalMs);
+      // Play quiz notes strictly in sequence so every note is heard in full.
+      scheduleRawSample(context, sampleId, context.currentTime + 0.001);
+
+      const noteDurationMs = Math.ceil(buffer.duration * 1000);
+      const pauseMs = index === notes.length - 1 ? 120 : NOTE_GAP_MS;
+      await sleep(noteDurationMs + pauseMs);
+    }
   } catch (error) {
     if (!isAudioUnlockPendingError(error)) {
       showGlobalError(error.message || "Failed to play tones");
