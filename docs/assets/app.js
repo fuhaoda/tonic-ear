@@ -1658,7 +1658,17 @@ function scheduleRawSample(context, sampleId, startAt) {
   source.connect(context.destination);
   source.__alive = true;
 
+  let cleaned = false;
+  let cleanupTimer = null;
   const cleanup = () => {
+    if (cleaned) {
+      return;
+    }
+    cleaned = true;
+    if (cleanupTimer !== null) {
+      window.clearTimeout(cleanupTimer);
+      cleanupTimer = null;
+    }
     source.__alive = false;
     state.activeVoices = state.activeVoices.filter((voice) => voice !== source);
     try {
@@ -1669,8 +1679,9 @@ function scheduleRawSample(context, sampleId, startAt) {
   };
   source.onended = cleanup;
 
-  const maxLifetimeMs = Math.ceil((buffer.duration + 0.3) * 1000);
-  window.setTimeout(cleanup, maxLifetimeMs);
+  const startDelaySec = Math.max(0, startAt - context.currentTime);
+  const maxLifetimeMs = Math.ceil((startDelaySec + buffer.duration + 0.3) * 1000);
+  cleanupTimer = window.setTimeout(cleanup, maxLifetimeMs);
 
   try {
     source.start(startAt);
