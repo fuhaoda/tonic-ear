@@ -11,8 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes import router as api_router
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-WEB_DIR = BASE_DIR / "web"
-ASSETS_DIR = WEB_DIR / "assets"
+DOCS_DIR = BASE_DIR / "docs"
+ASSETS_DIR = DOCS_DIR / "assets"
 
 app = FastAPI(title="Tonic Ear", version="1.0.0")
 app.include_router(api_router)
@@ -22,4 +22,4 @@ app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
-    return FileResponse(WEB_DIR / "index.html")
+    return FileResponse(DOCS_DIR / "index.html")

@@ -11,7 +11,7 @@ COPY requirements.txt ./
 RUN sh -c "pip install --no-cache-dir ${PIP_EXTRA_ARGS} -r requirements.txt"
 
 COPY app ./app
-COPY web ./web
+COPY docs ./docs
 
 EXPOSE 8080
 

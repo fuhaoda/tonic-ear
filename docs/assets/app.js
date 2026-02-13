@@ -1,4 +1,4 @@
-const API_BASE = "/api/v1";
+import { buildMeta, generateSession } from "./local-session.js";
 const AUDIO_DEBUG_ENABLED = new URLSearchParams(window.location.search).get("audio_debug") === "1";
 
 const NOTE_GAP_MS = 250;
@@ -290,12 +290,7 @@ function setupAudioDebugPanel() {
 }
 
 async function loadMeta() {
-  const response = await fetch(`${API_BASE}/meta`);
-  if (!response.ok) {
-    throw new Error("Failed to load app metadata");
-  }
-
-  const meta = await response.json();
+  const meta = buildMeta();
   state.meta = meta;
   state.moduleMap = new Map(meta.modules.map((module) => [module.id, module]));
 }
@@ -305,7 +300,7 @@ function isInstrumentSupported(instrumentId) {
 }
 
 function manifestPathForInstrument(instrumentId) {
-  return `/assets/audio/${instrumentId}/manifest.json`;
+  return `assets/audio/${instrumentId}/manifest.json`;
 }
 
 async function loadAudioManifest(instrumentId) {
@@ -586,19 +581,14 @@ async function startSession(moduleId) {
     state.settings.temperament = payload.temperament;
     persistSettings();
 
-    const response = await fetch(`${API_BASE}/session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+    state.session = generateSession({
+      moduleId: payload.moduleId,
+      instrument: payload.instrument,
+      gender: payload.gender,
+      key: payload.key,
+      temperament: payload.temperament,
+      mapTargetFrequency: mapTargetHzToSample,
     });
-
-    if (!response.ok) {
-      const errorBody = await response.json().catch(() => ({}));
-      const detail = errorBody.detail || "Failed to start session";
-      throw new Error(detail);
-    }
-
-    state.session = await response.json();
     state.currentIndex = 0;
     state.answers = new Array(state.session.questions.length).fill(null);
     state.currentAnswered = false;
@@ -1509,11 +1499,17 @@ async function ensureSampleBuffer(context, sampleId) {
 }
 
 function resolveSampleFileUrl(sample) {
-  const separator = sample.file.includes("?") ? "&" : "?";
-  const version = encodeURIComponent(
-    `${state.audioManifestInstrument || "piano"}-${state.audioAssetVersion || "0"}`,
-  );
-  return `${sample.file}${separator}v=${version}`;
+  const version = `${state.audioManifestInstrument || "piano"}-${state.audioAssetVersion || "0"}`;
+  const rawFile = String(sample.file || "");
+  const normalizedPath =
+    rawFile.startsWith("http://") || rawFile.startsWith("https://")
+      ? rawFile
+      : rawFile.startsWith("/")
+        ? rawFile.slice(1)
+        : rawFile;
+  const resolved = new URL(normalizedPath, document.baseURI);
+  resolved.searchParams.set("v", version);
+  return resolved.toString();
 }
 
 function decodeAudioData(context, encoded) {
@@ -1573,6 +1569,7 @@ function mapTargetHzToSample(targetHz) {
   const centsError = 1200 * Math.log2(targetHz / nearestSample.hz);
   return {
     sampleId: nearestSample.id,
+    midi: nearestSample.midi,
     sampleHz: nearestSample.hz,
     centsError,
   };

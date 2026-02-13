@@ -13,8 +13,8 @@ from app.domain.generator import generate_session, get_meta
 from app.domain.music import EQUAL_TEMPERAMENT, GENDER_OPTIONS, KEY_OPTIONS, calculate_do_frequency, note_frequency
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PIANO_DIR = REPO_ROOT / "web" / "assets" / "audio" / "piano"
-GUITAR_DIR = REPO_ROOT / "web" / "assets" / "audio" / "guitar"
+PIANO_DIR = REPO_ROOT / "docs" / "assets" / "audio" / "piano"
+GUITAR_DIR = REPO_ROOT / "docs" / "assets" / "audio" / "guitar"
 
 
 def test_equal_temperament_unique_count_matches_expected():

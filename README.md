@@ -2,6 +2,7 @@
 
 Tonic Ear is a progressive ear-training web app for pitch and scale recognition.
 It is built with FastAPI + vanilla JS and is designed for desktop, iPad, and iPhone browsers.
+The frontend can now run in fully static mode (no backend required) for GitHub Pages deployment.
 
 ## Purpose
 
@@ -27,6 +28,7 @@ Each session has 20 questions with first-attempt scoring.
 - Optional visual pitch hints
 - First-attempt scoring + optional retry practice + show answer
 - Local progress persistence (`localStorage`)
+- Frontend-only local session generation for static hosting (`docs/` on GitHub Pages)
 - Desktop keyboard `1-7` plus alternate layout `m,.jklu`
 - Mobile/tablet compact keyboard `1-7` + optional full-screen keyboard mode
 - Browser history and top `Home` button navigation
@@ -65,8 +67,8 @@ This version uses **raw sample playback only** for all playback (quiz + keyboard
   - University of Iowa MIS Guitar (`ff`, onset-sliced from range recordings)
 - Singing-focused range: **70-1000Hz** with dense semitone coverage (`D2..B5`, 46 files)
 - Output assets:
-  - `web/assets/audio/piano/`
-  - `web/assets/audio/guitar/`
+  - `docs/assets/audio/piano/`
+  - `docs/assets/audio/guitar/`
 - File format: AAC `.m4a`, mono, 44.1kHz
 - Fixed duration:
   - Piano: **1.0 second** per sample
@@ -110,10 +112,10 @@ python3 scripts/build_guitar_samples.py --clean --refresh-sources --duration 1.5
 
 This regenerates:
 
-- `web/assets/audio/piano/*.m4a` (46 files)
-- `web/assets/audio/piano/manifest.json`
-- `web/assets/audio/guitar/*.m4a` (46 files)
-- `web/assets/audio/guitar/manifest.json`
+- `docs/assets/audio/piano/*.m4a` (46 files)
+- `docs/assets/audio/piano/manifest.json`
+- `docs/assets/audio/guitar/*.m4a` (46 files)
+- `docs/assets/audio/guitar/manifest.json`
 
 ## Quick Start (Local)
 
@@ -130,6 +132,36 @@ Open:
 - `http://127.0.0.1:2121`
 
 Do not use `http://0.0.0.0:2121` in Safari.
+
+## GitHub Pages Deployment (Single-source `docs/`)
+
+This repo follows the KeyBand-style single-source layout:
+frontend code and audio assets live directly in `docs/`, and GitHub Pages serves `docs/`.
+
+1. In GitHub:
+- Open `Settings` -> `Pages`
+- `Build and deployment` -> `Source: Deploy from a branch`
+- Branch: `main`
+- Folder: `/docs`
+- Save
+
+2. Commit and push updates (including `docs/`):
+
+```bash
+git add docs app scripts Dockerfile tests README.md GITHUB_PAGES_DEPLOY.md
+git commit -m "Update site"
+git push
+```
+
+3. After GitHub finishes publishing, open:
+
+`https://<your-github-username>.github.io/<your-repo-name>/`
+
+Notes:
+- Frontend source of truth is `docs/` (there is no `web/` mirror).
+- Keep `docs/.nojekyll` in the repo.
+- If you use a custom domain, keep `docs/CNAME` in the repo.
+- Full deployment reference is in `GITHUB_PAGES_DEPLOY.md`.
 
 ## Docker Deployment
 
@@ -251,6 +283,9 @@ docker compose up -d --force-recreate
 ```
 
 ## API
+
+The browser app no longer requires these endpoints for normal usage on GitHub Pages.
+They remain available when running the FastAPI backend mode.
 
 ### `GET /api/v1/meta`
 

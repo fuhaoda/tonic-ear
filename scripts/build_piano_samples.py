@@ -42,7 +42,7 @@ GAIN_CLAMP_MAX = 3.00
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", default="web/assets/audio/piano", help="Output directory")
+    parser.add_argument("--output-dir", default="docs/assets/audio/piano", help="Output directory")
     parser.add_argument("--cache-dir", default=".cache/piano_mis_ff", help="Source cache directory")
     parser.add_argument("--duration", type=float, default=1.0, help="Output duration in seconds")
     parser.add_argument("--sample-rate", type=int, default=44100, help="Output sample rate")
