@@ -119,6 +119,14 @@ This regenerates:
 
 ## Quick Start (Local)
 
+Fastest repo-local start:
+
+```bash
+./start_local.sh
+```
+
+This script creates `.venv` if needed, activates it, installs requirements if missing, and starts the app on port `2121`.
+
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
