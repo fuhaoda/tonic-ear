@@ -126,6 +126,8 @@ Fastest repo-local start:
 ```
 
 This script creates `.venv` if needed, activates it, installs requirements if missing, and starts the app on port `2121`.
+If `2121` is already occupied, it automatically picks the next available port.
+You can also force a specific port with `PORT=3000 ./start_local.sh`.
 
 ```bash
 python3.12 -m venv .venv
